@@ -76,6 +76,7 @@ export class EdgeTtsService {
   public static readonly ENGLISH_VOICE = 'en-US-GuyNeural';
 
   private isBengali(text: string): boolean {
+    if (/[\u0980-\u09FF]/.test(text)) return true;
     const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
     return nonAscii / text.length > 0.4;
   }

@@ -5,6 +5,7 @@ export interface SynthesisOptions {
   rate?: string;
   pitch?: string;
   volume?: string;
+  provider?: 'easyvoice' | 'edgetts' | 'auto';
 }
 
 export interface TtsConnectionStatus {

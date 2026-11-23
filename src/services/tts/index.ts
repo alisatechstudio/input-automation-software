@@ -11,6 +11,12 @@ export class UnifiedTtsService {
     this.edgeTts = new EdgeTtsService();
   }
 
+  public isBengali(text: string): boolean {
+    if (/[\u0980-\u09FF]/.test(text)) return true;
+    const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
+    return nonAscii / text.length > 0.4;
+  }
+
   public cleanDescription(description?: string, headline?: string): string {
     return this.edgeTts.cleanDescription(description, headline);
   }
@@ -22,8 +28,45 @@ export class UnifiedTtsService {
     const cleanText = (text || '').trim();
     if (!cleanText) return null;
 
-    // 1. Primary: EasyVoice OpenAI-compatible TTS API
-    if (this.easyVoiceTts.isConfigured()) {
+    const hasBengali = this.isBengali(cleanText);
+    const isEn = options?.isEnglish !== undefined ? options.isEnglish : !hasBengali;
+
+    // 1. BANGLA TEXT:
+    // EasyVoice (Kokoro-82M / af_aoede) only supports English/Latin phonemes and cannot pronounce
+    // Bengali Unicode characters properly.
+    // For Bangla, Microsoft Edge Neural TTS (bn-BD-NabanitaNeural) provides authentic, natural,
+    // and fluent Dhaka news broadcast voiceover.
+    if (!isEn || hasBengali) {
+      if (options?.provider === 'easyvoice') {
+        console.log('[UnifiedTtsService] Explicit EasyVoice requested for Bangla text...');
+        return this.easyVoiceTts.synthesize(cleanText, options);
+      }
+
+      console.log('[UnifiedTtsService] 🇧🇩 Bangla text detected -> using Microsoft Edge Neural TTS (bn-BD-NabanitaNeural)...');
+      try {
+        const audioBuffer = await this.edgeTts.synthesize(cleanText, {
+          ...options,
+          isEnglish: false,
+          voice: options?.voice || EdgeTtsService.BENGALI_VOICE,
+        });
+        if (audioBuffer && audioBuffer.length > 500) {
+          return audioBuffer;
+        }
+      } catch (err: any) {
+        console.warn('[UnifiedTtsService] Edge TTS Bengali error:', err.message);
+      }
+
+      // Emergency fallback if Edge TTS fails
+      if (this.easyVoiceTts.isConfigured()) {
+        console.warn('[UnifiedTtsService] ⚠️ Edge TTS failed, attempting EasyVoice fallback...');
+        return this.easyVoiceTts.synthesize(cleanText, options);
+      }
+      return null;
+    }
+
+    // 2. ENGLISH TEXT:
+    // Use EasyVoice (Kokoro-82M / af_aoede) as primary, with Microsoft Edge TTS (en-US-GuyNeural) as fallback.
+    if (this.easyVoiceTts.isConfigured() && options?.provider !== 'edgetts') {
       try {
         const audioBuffer = await this.easyVoiceTts.synthesize(cleanText, options);
         if (audioBuffer && audioBuffer.length > 500) {
@@ -35,33 +78,23 @@ export class UnifiedTtsService {
       }
     }
 
-    // 2. Fallback: Microsoft Edge Neural TTS
-    console.log('[UnifiedTtsService] 🔄 Using fallback: Microsoft Edge Neural TTS...');
-    return this.edgeTts.synthesize(cleanText, options);
+    console.log('[UnifiedTtsService] 🔄 Using fallback: Microsoft Edge Neural TTS (en-US-GuyNeural)...');
+    return this.edgeTts.synthesize(cleanText, {
+      ...options,
+      isEnglish: true,
+      voice: options?.voice || EdgeTtsService.ENGLISH_VOICE,
+    });
   }
 
   public async testConnection(): Promise<TtsConnectionStatus> {
-    if (this.easyVoiceTts.isConfigured()) {
-      try {
-        const evTest = await this.easyVoiceTts.synthesize('Testing EasyVoice voiceover connection.');
-        if (evTest && evTest.length > 500) {
-          return {
-            available: true,
-            activeProvider: 'EasyVoice (Primary)',
-            voice: 'af_aoede',
-            message: 'EasyVoice Kokoro-82M TTS is active and generating speech.',
-          };
-        }
-      } catch (err: any) {
-        console.warn('[UnifiedTtsService] EasyVoice test note:', err.message);
-      }
-    }
-
     const edgeStatus = await this.edgeTts.testConnection();
+    const evConfigured = this.easyVoiceTts.isConfigured();
+
     return {
-      ...edgeStatus,
-      activeProvider: `${edgeStatus.activeProvider} (Fallback)`,
-      message: `EasyVoice unavailable. Fallback active: ${edgeStatus.message}`,
+      available: edgeStatus.available || evConfigured,
+      activeProvider: 'Edge TTS (Bangla) + EasyVoice (English)',
+      voice: `${EdgeTtsService.BENGALI_VOICE} (Bangla) / af_aoede (English)`,
+      message: `Bangla voiceover uses Microsoft Edge Neural (${EdgeTtsService.BENGALI_VOICE}); English voiceover uses EasyVoice (Kokoro-82M).`,
     };
   }
 }
