@@ -608,22 +608,22 @@ export class ReelVideoRenderer {
     }
     const tempFile = path.join(tempOutputDir, `reel_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.mp4`);
 
-    // 3. Synthesize Voiceover exclusively using Microsoft Edge TTS (bn-BD-PradeepNeural for Bengali / en-US-GuyNeural for English)
+    // 3. Synthesize Voiceover: EasyVoice API (OpenAI-compatible) with Edge TTS fallback
     let voiceoverBuffer = input.voiceoverBuffer || null;
     const textToSpeak = (input.description && input.description.trim()) ? input.description : headline;
     if (!voiceoverBuffer && textToSpeak) {
       const speechScript = this.ttsService.cleanDescription(textToSpeak, headline);
       if (speechScript) {
         try {
-          console.log(`[ReelVideoRenderer] 🎙️ Synthesizing news voiceover via Edge TTS: "${speechScript.substring(0, 50)}..."`);
+          console.log(`[ReelVideoRenderer] 🎙️ Synthesizing news voiceover: "${speechScript.substring(0, 50)}..."`);
           voiceoverBuffer = await this.ttsService.synthesize(speechScript, {
             isEnglish,
           });
           if (voiceoverBuffer) {
-            console.log(`[ReelVideoRenderer] ✓ Edge TTS voiceover generated successfully (${voiceoverBuffer.length} bytes)`);
+            console.log(`[ReelVideoRenderer] ✓ News voiceover generated successfully (${voiceoverBuffer.length} bytes)`);
           }
         } catch (ttsErr: any) {
-          console.warn('[ReelVideoRenderer] Edge TTS voiceover note:', ttsErr.message);
+          console.warn('[ReelVideoRenderer] TTS voiceover note:', ttsErr.message);
         }
       }
     }
@@ -692,10 +692,10 @@ export class ReelVideoRenderer {
       '-i', '-', // Zero-copy raw RGBA stream from stdin (Input 0)
     ];
 
-    // Exclusively use Edge TTS voiceover. All other voices, background music, and extra audio tracks are completely removed.
+    // Use narration voiceover stream (EasyVoice primary / Edge TTS fallback)
     if (tempVoiceFile) {
       ffmpegArgs.push(
-        '-i', tempVoiceFile, // Voiceover stream from Edge TTS (Input 1)
+        '-i', tempVoiceFile, // Voiceover stream (Input 1)
         '-af', 'apad',       // Pad with silence so video plays out full duration without early audio cut-off
         '-map', '0:v',
         '-map', '1:a'

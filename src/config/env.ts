@@ -19,6 +19,10 @@ export interface InputAppConfig {
   MAX_ARTICLE_AGE_HOURS: number;
   REEL_DEFAULT_DURATION: number;
   REEL_DEFAULT_THEME: string;
+  EASYVOICE_API_KEY: string;
+  EASYVOICE_BASE_URL: string;
+  EASYVOICE_MODEL: string;
+  EASYVOICE_VOICE: string;
   DATA_DIR: string;
   ASSETS_DIR: string;
 }
@@ -54,6 +58,12 @@ export const config: InputAppConfig = {
   MAX_ARTICLE_AGE_HOURS: process.env.MAX_ARTICLE_AGE_HOURS ? parseInt(process.env.MAX_ARTICLE_AGE_HOURS, 10) : 24,
   REEL_DEFAULT_DURATION: process.env.REEL_DEFAULT_DURATION ? parseInt(process.env.REEL_DEFAULT_DURATION, 10) : 8,
   REEL_DEFAULT_THEME: process.env.REEL_DEFAULT_THEME || 'canva-studio-rotate',
+  EASYVOICE_API_KEY:
+    process.env.EASYVOICE_API_KEY ||
+    'ev_fdd375170e510aad890bbac22db2e635a6d0a44a5dd2546ced2a8366172b8d0a',
+  EASYVOICE_BASE_URL: process.env.EASYVOICE_BASE_URL || 'https://easyvoice.ae/api/v1',
+  EASYVOICE_MODEL: process.env.EASYVOICE_MODEL || 'kokoro-82m',
+  EASYVOICE_VOICE: process.env.EASYVOICE_VOICE || 'af_aoede',
   DATA_DIR: dataDir,
   ASSETS_DIR: assetsDir,
 };
