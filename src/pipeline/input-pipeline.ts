@@ -237,7 +237,7 @@ export class InputPipelineService {
           {
             _id: 'default_trendingnews',
             name: 'Trending News World',
-            url: 'https://trendingnews.world/feed/',
+            url: 'https://trendingnews.world/rss.xml',
             pageId: 'trending',
             templateId: 'template-trendingnews-breaking',
             gdriveFolderId: config.GDRIVE_FOLDER_ID,
@@ -327,7 +327,7 @@ export class InputPipelineService {
 
         let fetchedItems: any[] = [];
         try {
-          fetchedItems = await this.parserService.fetchAndParse(source.url, 15);
+          fetchedItems = await this.parserService.fetchAndParse(source.url);
         } catch (fetchErr: any) {
           console.error(`[InputPipeline] Error fetching RSS from "${source.name}":`, fetchErr.message);
           sourceResults.push({
