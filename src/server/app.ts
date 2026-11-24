@@ -224,7 +224,9 @@ export function createInputServer(pipeline: InputPipelineService): Express {
     const isCronPath = req.path?.startsWith('/api/cron');
     const isExplicitAsync = req.query.async === 'true' || req.body?.async === true;
     const isExplicitSync = req.query.sync === 'true' || req.body?.sync === true;
-    const isSync = isExplicitSync || (isCronPath && !isExplicitAsync);
+    // Default cron endpoints to async execution via Vercel waitUntil to prevent cron-job.org 30s timeout,
+    // while allowing callers to pass ?sync=true if they explicitly want synchronous waiting.
+    const isSync = isExplicitSync;
 
     // Check if pipeline is already running for this folder or globally
     if (pipeline.isJobRunning(folderId)) {
