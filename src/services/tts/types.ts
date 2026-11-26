@@ -5,7 +5,7 @@ export interface SynthesisOptions {
   rate?: string;
   pitch?: string;
   volume?: string;
-  provider?: 'easyvoice' | 'edgetts' | 'auto';
+  provider?: 'elevenlabs' | 'cartesia' | 'murf' | 'easyvoice' | 'edgetts' | 'auto';
 }
 
 export interface TtsConnectionStatus {

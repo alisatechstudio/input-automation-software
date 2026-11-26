@@ -1,20 +1,38 @@
+import { CartesiaTtsService } from './cartesia.js';
+import { isBengaliText, resolveTtsLanguage } from './cleaner.js';
 import { EasyVoiceTtsService } from './easyvoice.js';
 import { EdgeTtsService } from './edge-tts.js';
+import { ElevenLabsTtsService } from './elevenlabs.js';
+import { MurfTtsService } from './murf.js';
 import { SynthesisOptions, TtsConnectionStatus } from './types.js';
 
+interface TtsProviderStep {
+  name: string;
+  enabled: boolean;
+  synthesize: () => Promise<Buffer | null>;
+}
+
+/**
+ * Unified TTS orchestrator with multi-provider fallback:
+ * ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Microsoft Edge TTS.
+ */
 export class UnifiedTtsService {
+  private elevenLabsTts: ElevenLabsTtsService;
+  private cartesiaTts: CartesiaTtsService;
+  private murfTts: MurfTtsService;
   private easyVoiceTts: EasyVoiceTtsService;
   private edgeTts: EdgeTtsService;
 
   constructor() {
+    this.elevenLabsTts = new ElevenLabsTtsService();
+    this.cartesiaTts = new CartesiaTtsService();
+    this.murfTts = new MurfTtsService();
     this.easyVoiceTts = new EasyVoiceTtsService();
     this.edgeTts = new EdgeTtsService();
   }
 
   public isBengali(text: string): boolean {
-    if (/[\u0980-\u09FF]/.test(text)) return true;
-    const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
-    return nonAscii / text.length > 0.4;
+    return isBengaliText(text);
   }
 
   public cleanDescription(description?: string, headline?: string): string {
@@ -28,77 +46,154 @@ export class UnifiedTtsService {
     const cleanText = (text || '').trim();
     if (!cleanText) return null;
 
-    const hasBengali = this.isBengali(cleanText);
-    const isEn = options?.isEnglish !== undefined ? options.isEnglish : !hasBengali;
+    const { isEnglish } = resolveTtsLanguage(cleanText, options?.isEnglish);
 
-    // 1. BANGLA TEXT:
-    // EasyVoice (Kokoro-82M / af_aoede) only supports English/Latin phonemes and cannot pronounce
-    // Bengali Unicode characters properly.
-    // For Bangla, Microsoft Edge Neural TTS (bn-BD-NabanitaNeural) provides authentic, natural,
-    // and fluent Dhaka news broadcast voiceover.
-    if (!isEn || hasBengali) {
-      if (options?.provider === 'easyvoice') {
-        console.log('[UnifiedTtsService] Explicit EasyVoice requested for Bangla text...');
-        return this.easyVoiceTts.synthesize(cleanText, options);
-      }
+    if (options?.provider && options.provider !== 'auto') {
+      return this.synthesizeWithExplicitProvider(cleanText, options.provider, {
+        ...options,
+        isEnglish,
+      });
+    }
 
-      console.log('[UnifiedTtsService] 🇧🇩 Bangla text detected -> using Microsoft Edge Neural TTS (bn-BD-NabanitaNeural)...');
-      try {
-        const audioBuffer = await this.edgeTts.synthesize(cleanText, {
+    // Strip provider-specific voice overrides in auto fallback mode so each provider uses its native voice.
+    const { voice: _ignoredVoice, ...autoOptions } = options || {};
+    const stepOptions: SynthesisOptions = { ...autoOptions, isEnglish };
+
+    const primaryCloudSteps: TtsProviderStep[] = [
+      {
+        name: 'ElevenLabs',
+        enabled: this.elevenLabsTts.isConfigured(),
+        synthesize: () => this.elevenLabsTts.synthesize(cleanText, stepOptions),
+      },
+      {
+        name: 'Cartesia',
+        enabled: this.cartesiaTts.isConfigured(),
+        synthesize: () => this.cartesiaTts.synthesize(cleanText, stepOptions),
+      },
+      {
+        name: 'MurfAI',
+        enabled: this.murfTts.isConfigured(),
+        synthesize: () => this.murfTts.synthesize(cleanText, stepOptions),
+      },
+    ];
+
+    const fallbackSteps: TtsProviderStep[] = isEnglish
+      ? [
+          {
+            name: 'EasyVoice',
+            enabled: this.easyVoiceTts.isConfigured(),
+            synthesize: () => this.easyVoiceTts.synthesize(cleanText, stepOptions),
+          },
+          {
+            name: 'EdgeTTS',
+            enabled: true,
+            synthesize: () =>
+              this.edgeTts.synthesize(cleanText, {
+                ...stepOptions,
+                voice: EdgeTtsService.ENGLISH_VOICE,
+              }),
+          },
+        ]
+      : [
+          {
+            name: 'EdgeTTS',
+            enabled: true,
+            synthesize: () =>
+              this.edgeTts.synthesize(cleanText, {
+                ...stepOptions,
+                voice: EdgeTtsService.BENGALI_VOICE,
+              }),
+          },
+          {
+            name: 'EasyVoice',
+            enabled: this.easyVoiceTts.isConfigured(),
+            synthesize: () => this.easyVoiceTts.synthesize(cleanText, stepOptions),
+          },
+        ];
+
+    return this.runFallbackChain([...primaryCloudSteps, ...fallbackSteps], isEnglish ? 'English' : 'Bangla');
+  }
+
+  private async synthesizeWithExplicitProvider(
+    text: string,
+    provider: NonNullable<SynthesisOptions['provider']>,
+    options: SynthesisOptions
+  ): Promise<Buffer | null> {
+    switch (provider) {
+      case 'elevenlabs':
+        return this.elevenLabsTts.synthesize(text, options);
+      case 'cartesia':
+        return this.cartesiaTts.synthesize(text, options);
+      case 'murf':
+        return this.murfTts.synthesize(text, options);
+      case 'easyvoice':
+        return this.easyVoiceTts.synthesize(text, options);
+      case 'edgetts':
+        return this.edgeTts.synthesize(text, {
           ...options,
-          isEnglish: false,
-          voice: options?.voice || EdgeTtsService.BENGALI_VOICE,
+          voice:
+            options.voice ||
+            (options.isEnglish ? EdgeTtsService.ENGLISH_VOICE : EdgeTtsService.BENGALI_VOICE),
         });
+      default:
+        return null;
+    }
+  }
+
+  private async runFallbackChain(steps: TtsProviderStep[], languageLabel: string): Promise<Buffer | null> {
+    const enabledSteps = steps.filter((s) => s.enabled);
+
+    for (let i = 0; i < enabledSteps.length; i++) {
+      const step = enabledSteps[i];
+      const nextStep = enabledSteps[i + 1];
+      try {
+        const audioBuffer = await step.synthesize();
         if (audioBuffer && audioBuffer.length > 500) {
           return audioBuffer;
+        }
+        if (nextStep) {
+          console.warn(
+            `[UnifiedTtsService] ⚠️ ${step.name} returned empty buffer (${languageLabel}), falling back to ${nextStep.name}...`
+          );
         }
       } catch (err: any) {
-        console.warn('[UnifiedTtsService] Edge TTS Bengali error:', err.message);
-      }
-
-      // Emergency fallback if Edge TTS fails
-      if (this.easyVoiceTts.isConfigured()) {
-        console.warn('[UnifiedTtsService] ⚠️ Edge TTS failed, attempting EasyVoice fallback...');
-        return this.easyVoiceTts.synthesize(cleanText, options);
-      }
-      return null;
-    }
-
-    // 2. ENGLISH TEXT:
-    // Use EasyVoice (Kokoro-82M / af_aoede) as primary, with Microsoft Edge TTS (en-US-GuyNeural) as fallback.
-    if (this.easyVoiceTts.isConfigured() && options?.provider !== 'edgetts') {
-      try {
-        const audioBuffer = await this.easyVoiceTts.synthesize(cleanText, options);
-        if (audioBuffer && audioBuffer.length > 500) {
-          return audioBuffer;
+        if (nextStep) {
+          console.warn(
+            `[UnifiedTtsService] ⚠️ ${step.name} failed (${languageLabel}): ${err?.message || err} -> falling back to ${nextStep.name}...`
+          );
+        } else {
+          console.warn(`[UnifiedTtsService] ❌ ${step.name} failed (${languageLabel}): ${err?.message || err}`);
         }
-        console.warn('[UnifiedTtsService] ⚠️ EasyVoice returned empty buffer, falling back to Microsoft Edge TTS...');
-      } catch (evErr: any) {
-        console.warn(`[UnifiedTtsService] ⚠️ EasyVoice failed: ${evErr.message || evErr} -> falling back to Microsoft Edge TTS...`);
       }
     }
 
-    console.log('[UnifiedTtsService] 🔄 Using fallback: Microsoft Edge Neural TTS (en-US-GuyNeural)...');
-    return this.edgeTts.synthesize(cleanText, {
-      ...options,
-      isEnglish: true,
-      voice: options?.voice || EdgeTtsService.ENGLISH_VOICE,
-    });
+    return null;
   }
 
   public async testConnection(): Promise<TtsConnectionStatus> {
     const edgeStatus = await this.edgeTts.testConnection();
+    const elConfigured = this.elevenLabsTts.isConfigured();
+    const cartesiaConfigured = this.cartesiaTts.isConfigured();
+    const murfConfigured = this.murfTts.isConfigured();
     const evConfigured = this.easyVoiceTts.isConfigured();
 
+    const activeChain = [
+      elConfigured ? 'ElevenLabs' : null,
+      cartesiaConfigured ? 'Cartesia' : null,
+      murfConfigured ? 'Murf AI' : null,
+      evConfigured ? 'EasyVoice' : null,
+      edgeStatus.available ? 'Edge TTS' : null,
+    ].filter(Boolean);
+
     return {
-      available: edgeStatus.available || evConfigured,
-      activeProvider: 'Edge TTS (Bangla) + EasyVoice (English)',
-      voice: `${EdgeTtsService.BENGALI_VOICE} (Bangla) / af_aoede (English)`,
-      message: `Bangla voiceover uses Microsoft Edge Neural (${EdgeTtsService.BENGALI_VOICE}); English voiceover uses EasyVoice (Kokoro-82M).`,
+      available: elConfigured || cartesiaConfigured || murfConfigured || evConfigured || edgeStatus.available,
+      activeProvider: activeChain.join(' -> ') || 'None',
+      voice: `ElevenLabs (${this.elevenLabsTts.getDefaultVoice(true)}) / Cartesia (${this.cartesiaTts.getDefaultVoice(false)}) / Murf (${this.murfTts.getDefaultVoice(true)}, ${this.murfTts.getDefaultVoice(false)}) / Edge (${EdgeTtsService.BENGALI_VOICE})`,
+      message: `Priority chain: ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Microsoft Edge TTS (${activeChain.length} active providers).`,
     };
   }
 }
 
-export { EasyVoiceTtsService, EdgeTtsService };
+export { ElevenLabsTtsService, CartesiaTtsService, MurfTtsService, EasyVoiceTtsService, EdgeTtsService };
 export * from './types.js';
 export * from './cleaner.js';

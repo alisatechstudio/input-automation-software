@@ -11,7 +11,7 @@ import {
   CHROMIUM_FULL_VERSION,
 } from 'node-edge-tts/dist/drm.js';
 import { SynthesisOptions, TtsConnectionStatus } from './types.js';
-import { cleanSpeechScript } from './cleaner.js';
+import { cleanSpeechScript, isBengaliText } from './cleaner.js';
 
 let WS: any = globalThis.WebSocket;
 try {
@@ -75,12 +75,6 @@ export class EdgeTtsService {
   public static readonly BENGALI_VOICE = 'bn-BD-NabanitaNeural';
   public static readonly ENGLISH_VOICE = 'en-US-GuyNeural';
 
-  private isBengali(text: string): boolean {
-    if (/[\u0980-\u09FF]/.test(text)) return true;
-    const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
-    return nonAscii / text.length > 0.4;
-  }
-
   public cleanDescription(description?: string, headline?: string): string {
     return cleanSpeechScript(description, headline);
   }
@@ -89,7 +83,7 @@ export class EdgeTtsService {
     const cleanText = (text || '').trim();
     if (!cleanText) return null;
 
-    const isEn = options?.isEnglish !== undefined ? options.isEnglish : !this.isBengali(cleanText);
+    const isEn = options?.isEnglish !== undefined ? options.isEnglish : !isBengaliText(cleanText);
     const voice = options?.voice || (isEn ? EdgeTtsService.ENGLISH_VOICE : EdgeTtsService.BENGALI_VOICE);
     const tempDir = process.env.VERCEL ? '/tmp' : os.tmpdir();
 

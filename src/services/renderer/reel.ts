@@ -608,7 +608,7 @@ export class ReelVideoRenderer {
     }
     const tempFile = path.join(tempOutputDir, `reel_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.mp4`);
 
-    // 3. Synthesize Voiceover: EasyVoice API (OpenAI-compatible) with Edge TTS fallback
+    // 3. Synthesize Voiceover: ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Edge TTS fallback
     let voiceoverBuffer = input.voiceoverBuffer || null;
     const textToSpeak = (input.description && input.description.trim()) ? input.description : headline;
     if (!voiceoverBuffer && textToSpeak) {
@@ -692,7 +692,7 @@ export class ReelVideoRenderer {
       '-i', '-', // Zero-copy raw RGBA stream from stdin (Input 0)
     ];
 
-    // Use narration voiceover stream (EasyVoice primary / Edge TTS fallback)
+    // Use narration voiceover stream (ElevenLabs / Cartesia / Murf AI / EasyVoice / Edge TTS)
     if (tempVoiceFile) {
       ffmpegArgs.push(
         '-i', tempVoiceFile, // Voiceover stream (Input 1)

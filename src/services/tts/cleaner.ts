@@ -1,3 +1,23 @@
+export function isBengaliText(text: string): boolean {
+  if (!text) return false;
+  if (/[\u0980-\u09FF]/.test(text)) return true;
+  const nonAscii = (text.match(/[^\x00-\x7F]/g) || []).length;
+  return nonAscii / text.length > 0.4;
+}
+
+export function resolveTtsLanguage(
+  text: string,
+  isEnglishOption?: boolean
+): { isEnglish: boolean; isBengali: boolean; languageCode: 'en' | 'bn' } {
+  const isBengali = isBengaliText(text);
+  const isEnglish = !isBengali && (isEnglishOption !== undefined ? isEnglishOption : true);
+  return {
+    isEnglish,
+    isBengali,
+    languageCode: isEnglish ? 'en' : 'bn',
+  };
+}
+
 export function cleanSpeechScript(description?: string, headline?: string): string {
   const raw = (description || '').trim();
   const fallbackHeadline = (headline || '').trim();

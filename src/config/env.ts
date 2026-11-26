@@ -19,6 +19,24 @@ export interface InputAppConfig {
   MAX_ARTICLE_AGE_HOURS: number;
   REEL_DEFAULT_DURATION: number;
   REEL_DEFAULT_THEME: string;
+  ELEVENLABS_API_KEY: string;
+  ELEVENLABS_BASE_URL: string;
+  ELEVENLABS_MODEL_ID: string;
+  ELEVENLABS_VOICE_ID: string;
+  ELEVENLABS_VOICE_ID_BN: string;
+  CARTESIA_API_KEY: string;
+  CARTESIA_BASE_URL: string;
+  CARTESIA_VERSION: string;
+  CARTESIA_MODEL_ID: string;
+  CARTESIA_VOICE_ID: string;
+  CARTESIA_VOICE_ID_BN: string;
+  MURF_API_KEY: string;
+  MURF_BASE_URL: string;
+  MURF_MODEL: string;
+  MURF_VOICE_ID: string;
+  MURF_VOICE_ID_BN: string;
+  MURF_LOCALE_EN: string;
+  MURF_LOCALE_BN: string;
   EASYVOICE_API_KEY: string;
   EASYVOICE_BASE_URL: string;
   EASYVOICE_MODEL: string;
@@ -58,6 +76,25 @@ export const config: InputAppConfig = {
   MAX_ARTICLE_AGE_HOURS: process.env.MAX_ARTICLE_AGE_HOURS ? parseInt(process.env.MAX_ARTICLE_AGE_HOURS, 10) : 24,
   REEL_DEFAULT_DURATION: process.env.REEL_DEFAULT_DURATION ? parseInt(process.env.REEL_DEFAULT_DURATION, 10) : 8,
   REEL_DEFAULT_THEME: process.env.REEL_DEFAULT_THEME || 'canva-studio-rotate',
+  ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
+  ELEVENLABS_BASE_URL: process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io/v1',
+  ELEVENLABS_MODEL_ID: process.env.ELEVENLABS_MODEL_ID || 'eleven_v3',
+  ELEVENLABS_VOICE_ID: process.env.ELEVENLABS_VOICE_ID || 'onwK4e9ZLuTAKqWW03F9',
+  ELEVENLABS_VOICE_ID_BN:
+    process.env.ELEVENLABS_VOICE_ID_BN || process.env.ELEVENLABS_VOICE_ID || 'onwK4e9ZLuTAKqWW03F9',
+  CARTESIA_API_KEY: process.env.CARTESIA_API_KEY || '',
+  CARTESIA_BASE_URL: process.env.CARTESIA_BASE_URL || 'https://api.cartesia.ai',
+  CARTESIA_VERSION: process.env.CARTESIA_VERSION || '2025-04-16',
+  CARTESIA_MODEL_ID: process.env.CARTESIA_MODEL_ID || 'sonic-3',
+  CARTESIA_VOICE_ID: process.env.CARTESIA_VOICE_ID || 'a33f7a4c-100f-41cf-a1fd-5822e8fc253f',
+  CARTESIA_VOICE_ID_BN: process.env.CARTESIA_VOICE_ID_BN || '314be1d2-3d14-468d-be40-08a1af7df49d',
+  MURF_API_KEY: process.env.MURF_API_KEY || '',
+  MURF_BASE_URL: process.env.MURF_BASE_URL || 'https://global.api.murf.ai/v1',
+  MURF_MODEL: process.env.MURF_MODEL || 'falcon-2.1',
+  MURF_VOICE_ID: process.env.MURF_VOICE_ID || 'Judith',
+  MURF_VOICE_ID_BN: process.env.MURF_VOICE_ID_BN || 'bn-IN-arnab',
+  MURF_LOCALE_EN: process.env.MURF_LOCALE_EN || 'en-US',
+  MURF_LOCALE_BN: process.env.MURF_LOCALE_BN || 'bn-IN',
   EASYVOICE_API_KEY:
     process.env.EASYVOICE_API_KEY ||
     'ev_fdd375170e510aad890bbac22db2e635a6d0a44a5dd2546ced2a8366172b8d0a',
