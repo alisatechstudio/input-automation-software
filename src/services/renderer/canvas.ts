@@ -485,15 +485,15 @@ export class CanvasCardRenderer implements ImageRenderer {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Chat Icon + Text
+    // News Desk Icon + Text
     ctx.font = '16px sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText('💬', ribbonX + 18, footerY + footerH / 2 + 1);
+    ctx.fillText('📰', ribbonX + 18, footerY + footerH / 2 + 1);
 
     ctx.fillStyle = '#0f172a';
     ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
-    ctx.fillText(isEnglish ? 'Full Story in Comments' : 'বিস্তারিত কমেন্টে', ribbonX + (isEnglish ? 46 : 50), footerY + footerH / 2 + 1);
+    ctx.fillText(isEnglish ? 'Special Desk Report' : 'বিশেষ প্রতিবেদন', ribbonX + (isEnglish ? 46 : 50), footerY + footerH / 2 + 1);
     ctx.restore();
 
     // Output 95% Quality JPEG Buffer

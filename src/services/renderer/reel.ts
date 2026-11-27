@@ -328,6 +328,14 @@ export function remotionSpring(options: {
   return Math.max(0, val);
 }
 
+interface ReelPacingContext {
+  durationSeconds: number;
+  cutSeconds: number;
+  numCuts: number;
+  keyPoints: string[];
+  brollCount: number;
+}
+
 export class ReelVideoRenderer {
   private fontsRegistered: boolean = false;
   private ttsService: UnifiedTtsService;
@@ -418,6 +426,170 @@ export class ReelVideoRenderer {
       ctx.rect(x, y, w, h);
     }
     ctx.fill();
+    ctx.restore();
+  }
+
+  private getActiveCutState(
+    progress: number,
+    f: number,
+    articleImg: any,
+    hasVideoBg: boolean,
+    pacing?: ReelPacingContext
+  ): {
+    cutIdx: number;
+    numCuts: number;
+    localProgress: number;
+    showArticlePhoto: boolean;
+  } {
+    const duration = pacing?.durationSeconds || 16;
+    const cutSeconds = pacing?.cutSeconds || 4;
+    const numCuts = pacing?.numCuts || Math.max(1, Math.round(duration / cutSeconds));
+    const elapsedSec = Math.min(duration - 0.001, Math.max(0, f / 24));
+    const cutIdx = Math.min(numCuts - 1, Math.floor(elapsedSec / cutSeconds));
+    const localProgress = Math.min(1, Math.max(0, (elapsedSec - cutIdx * cutSeconds) / Math.max(0.5, cutSeconds)));
+
+    // Interleave the real article photo cleanly on cut 1 (and every 3rd cut thereafter) alongside B-roll shots
+    const isPhotoBeat =
+      Boolean(articleImg) && (!hasVideoBg || (numCuts >= 2 && (cutIdx === 1 || (cutIdx >= 4 && cutIdx % 3 === 1))));
+
+    return {
+      cutIdx,
+      numCuts,
+      localProgress,
+      showArticlePhoto: isPhotoBeat,
+    };
+  }
+
+  private renderStageVisualCut(
+    ctx: any,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    radius: number,
+    progress: number,
+    f: number,
+    articleImg: any,
+    hasVideoBg: boolean,
+    isEnglish: boolean,
+    brandText: string,
+    displayCategory: string,
+    strapBg: string,
+    strapAccent: string,
+    pacing?: ReelPacingContext
+  ): void {
+    const cut = this.getActiveCutState(progress, f, articleImg, hasVideoBg, pacing);
+
+    if (hasVideoBg && !cut.showArticlePhoto) {
+      if (radius > 0) {
+        this.punchVideoStageWindow(ctx, x, y, w, h, radius);
+      } else {
+        this.punchVideoStageWindow(ctx, x, y, w, h, 0);
+      }
+    }
+
+    ctx.save();
+    if (radius > 0) {
+      ctx.beginPath();
+      ctx.roundRect(x, y, w, h, radius);
+      ctx.clip();
+    }
+
+    if (cut.showArticlePhoto && articleImg) {
+      const easedCut = 1 - Math.pow(1 - cut.localProgress, 2.0);
+      const cutVariant = cut.cutIdx % 3;
+      const zoom =
+        cutVariant === 0
+          ? 1.02 + easedCut * 0.14
+          : cutVariant === 1
+          ? 1.18 - easedCut * 0.12
+          : 1.06 + Math.sin(cut.localProgress * Math.PI) * 0.1;
+      const panX = cutVariant === 1 ? (0.5 - cut.localProgress) * 38 : (cut.localProgress - 0.5) * 30;
+      const panY = Math.sin(cut.localProgress * Math.PI) * (cutVariant === 2 ? -24 : 24);
+      this.drawZoomedImage(ctx, articleImg, x, y, w, h, zoom, panY, panX);
+    } else if (!hasVideoBg) {
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = isEnglish ? 'bold 36px sans-serif' : 'bold 40px "Hind Siliguri", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${brandText} • ${displayCategory}`, x + w / 2, y + h / 2);
+    }
+    ctx.restore();
+  }
+
+  private drawEditorialCutOverlay(
+    ctx: any,
+    stageX: number,
+    stageW: number,
+    beatTopY: number,
+    calloutBottomY: number,
+    strapBg: string,
+    strapAccent: string,
+    progress: number,
+    f: number,
+    isEnglish: boolean,
+    articleImg: any,
+    hasVideoBg: boolean,
+    pacing?: ReelPacingContext
+  ): void {
+    const cut = this.getActiveCutState(progress, f, articleImg, hasVideoBg, pacing);
+    const keyPoints = pacing?.keyPoints || [];
+    const beatTitlesEn = ['LEAD STORY', 'STORY VISUAL', 'KEY CONTEXT', 'IMPACT & ANALYSIS', 'OUTLOOK'];
+    const beatTitlesBn = ['মূল সংবাদ', 'ঘটনার চিত্র', 'মূল প্রেক্ষাপট', 'প্রভাব ও বিশ্লেষণ', 'সারসংক্ষেপ'];
+
+    const beatLabel = cut.showArticlePhoto
+      ? isEnglish
+        ? `SHOT ${cut.cutIdx + 1}/${cut.numCuts} • STORY PHOTO`
+        : `দৃশ্য ${cut.cutIdx + 1}/${cut.numCuts} • ঘটনার আলোকচিত্র`
+      : isEnglish
+      ? `SHOT ${cut.cutIdx + 1}/${cut.numCuts} • ${beatTitlesEn[cut.cutIdx % beatTitlesEn.length]}`
+      : `দৃশ্য ${cut.cutIdx + 1}/${cut.numCuts} • ${beatTitlesBn[cut.cutIdx % beatTitlesBn.length]}`;
+
+    // Beat badge at top-left of visible stage
+    ctx.save();
+    ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 20px "Hind Siliguri", sans-serif';
+    const badgeW = Math.min(stageW - 60, ctx.measureText(beatLabel).width + 36);
+    const bx = stageX + 26;
+    const by = beatTopY;
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+    ctx.beginPath();
+    ctx.roundRect(bx, by, badgeW, 38, 19);
+    ctx.fill();
+    ctx.strokeStyle = strapAccent || '#f59e0b';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(beatLabel, bx + 18, by + 19);
+
+    // On subsequent cuts (cutIdx >= 1), render active key-context highlight callout cleanly above ticker
+    if (keyPoints.length > 0 && cut.cutIdx >= 1) {
+      const activePoint = keyPoints[(cut.cutIdx - 1) % keyPoints.length];
+      const maxBoxW = Math.max(260, stageW - 260);
+      ctx.font = isEnglish ? 'bold 21px sans-serif' : 'bold 23px "Hind Siliguri", sans-serif';
+      const pointText = activePoint.length > 62 ? `${activePoint.slice(0, 59)}...` : activePoint;
+      const boxW = Math.min(maxBoxW, ctx.measureText(pointText).width + 52);
+      const boxX = stageX + 26;
+      const boxY = calloutBottomY - 56;
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.84)';
+      ctx.beginPath();
+      ctx.roundRect(boxX, boxY, boxW, 50, 12);
+      ctx.fill();
+
+      ctx.fillStyle = strapBg || '#dc2626';
+      ctx.beginPath();
+      ctx.roundRect(boxX, boxY, 8, 50, [12, 0, 0, 12]);
+      ctx.fill();
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(pointText, boxX + 22, boxY + 25);
+    }
     ctx.restore();
   }
 
@@ -686,7 +858,7 @@ export class ReelVideoRenderer {
     }
     const tempFile = path.join(tempOutputDir, `reel_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.mp4`);
 
-    // 1. Rewrite script into natural broadcast commentary + extract English B-roll search keywords
+    // 1. Rewrite script into editorial commentary + extract topic-matched B-roll searches and key points
     let voiceoverBuffer = input.voiceoverBuffer || null;
     const textToSpeak = (input.description && input.description.trim()) ? input.description : headline;
     const rewriteResult = await this.scriptRewriter.rewriteForReel({
@@ -696,21 +868,26 @@ export class ReelVideoRenderer {
       isEnglish,
     });
 
-    let speechScript = rewriteResult.spokenScript || this.ttsService.cleanDescription(textToSpeak, headline);
-    if (speechScript && !isEnglish && !/কমেন্টে দে(?:য়া|ওয়া) লিংকে/.test(speechScript)) {
-      const endsWithPunct = /[।!?.\n]$/.test(speechScript);
-      speechScript = `${speechScript}${endsWithPunct ? ' ' : '। '}বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে।`;
-    }
+    const speechScript = rewriteResult.spokenScript || this.ttsService.cleanDescription(textToSpeak, headline);
 
-    // 2. Fetch channel logo, Pixabay licensed B-roll video, and TTS voiceover in parallel
-    const [logoImg, tempBgVideoFile, synthesizedAudio] = await Promise.all([
+    // 2. Fetch channel logo, multiple topic B-roll clips (3-5s pacing), story image, and TTS in parallel
+    const [logoImg, tempBgVideoFiles, fetchedArticleImg, synthesizedAudio] = await Promise.all([
       this.loadLogoImage(isEnglish),
-      this.pixabayService.fetchBackgroundVideo({
+      this.pixabayService.fetchBackgroundVideos({
+        queries: rewriteResult.brollQueries,
         query: rewriteResult.brollQuery,
         category,
+        headline,
         seedText: `${headline} ${website}`,
         outputDir: tempOutputDir,
+        maxClips: 3,
       }),
+      input.imageUrl
+        ? this.loadImageWithTimeout(input.imageUrl, 5000).catch((e: any) => {
+            console.warn('[ReelVideoRenderer] Could not load article image for reel:', e.message);
+            return null;
+          })
+        : Promise.resolve(null),
       !voiceoverBuffer && speechScript
         ? (async () => {
             try {
@@ -732,15 +909,7 @@ export class ReelVideoRenderer {
       voiceoverBuffer = synthesizedAudio;
     }
 
-    // Fallback to static article image only if no Pixabay B-roll video was found
-    let articleImg: any = null;
-    if (!tempBgVideoFile && input.imageUrl) {
-      try {
-        articleImg = await this.loadImageWithTimeout(input.imageUrl, 5000);
-      } catch (e: any) {
-        console.warn('[ReelVideoRenderer] Could not load fallback article image for reel:', e.message);
-      }
-    }
+    const articleImg: any = fetchedArticleImg;
 
     let tempVoiceFile: string | null = null;
     if (voiceoverBuffer && voiceoverBuffer.length > 500) {
@@ -793,45 +962,73 @@ export class ReelVideoRenderer {
       }
     }
 
-    const hasVideoBg = Boolean(tempBgVideoFile);
+    const hasVideoBg = tempBgVideoFiles.length > 0;
+    const numCuts = Math.max(1, Math.min(8, Math.ceil(durationSeconds / 4.5)));
+    const cutSeconds = durationSeconds / numCuts;
+    const pacingContext: ReelPacingContext = {
+      durationSeconds,
+      cutSeconds,
+      numCuts,
+      keyPoints: rewriteResult.keyPoints,
+      brollCount: tempBgVideoFiles.length,
+    };
 
-    // 4. Configure FFmpeg spawn arguments with low-resource featherweight settings
+    // 4. Configure FFmpeg spawn arguments with multi-shot 3-5s cut sequencing
     const numThreads = Math.min(2, os.cpus()?.length || 1);
     const ffmpegPreset = 'ultrafast';
     const ffmpegCrf = '26';
 
     const ffmpegArgs: string[] = ['-y', '-threads', String(numThreads)];
 
-    if (hasVideoBg && tempBgVideoFile) {
+    if (hasVideoBg) {
       const stage = this.getVideoStageRect(theme, width, height, refWidth, refHeight);
+      const filterParts: string[] = [];
+      const concatLabels: string[] = [];
+
+      for (let i = 0; i < numCuts; i++) {
+        const clipPath = tempBgVideoFiles[i % tempBgVideoFiles.length];
+        const segDur = (cutSeconds + (i === numCuts - 1 ? 0.4 : 0)).toFixed(3);
+        ffmpegArgs.push('-stream_loop', '-1', '-t', segDur, '-i', clipPath);
+
+        const repeatRound = Math.floor(i / tempBgVideoFiles.length);
+        const cropVariant =
+          repeatRound > 0
+            ? `,crop=trunc(iw*0.8/2)*2:trunc(ih*0.8/2)*2${i % 2 === 1 ? ',hflip' : ''}`
+            : '';
+        filterParts.push(
+          `[${i}:v]trim=duration=${segDur},setpts=PTS-STARTPTS${cropVariant},scale=${stage.w}:${stage.h}:force_original_aspect_ratio=increase,crop=${stage.w}:${stage.h},fps=${fps},setsar=1[s${i}]`
+        );
+        concatLabels.push(`[s${i}]`);
+      }
+
+      const overlayInputIdx = numCuts;
       ffmpegArgs.push(
-        '-stream_loop', '-1',
-        '-i', tempBgVideoFile, // Input 0: Looped Pixabay B-roll video
         '-f', 'rawvideo',
         '-pix_fmt', 'rgba',
         '-s', `${width}x${height}`,
         '-r', String(fps),
-        '-i', '-' // Input 1: Transparent RGBA canvas overlay stream
+        '-i', '-' // Transparent RGBA canvas overlay stream
       );
 
+      const audioInputIdx = numCuts + 1;
       if (tempVoiceFile) {
-        ffmpegArgs.push('-i', tempVoiceFile); // Input 2: Voiceover audio
+        ffmpegArgs.push('-i', tempVoiceFile);
       } else {
         ffmpegArgs.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
       }
 
-      const filterParts = [
-        `[0:v]scale=${stage.w}:${stage.h}:force_original_aspect_ratio=increase,crop=${stage.w}:${stage.h},fps=${fps},pad=${width}:${height}:${stage.x}:${stage.y}:black,setsar=1[bg]`,
-        `[bg][1:v]overlay=0:0:shortest=1,format=yuv420p[v]`,
-      ];
+      filterParts.push(
+        `${concatLabels.join('')}concat=n=${numCuts}:v=1:a=0,pad=${width}:${height}:${stage.x}:${stage.y}:black[bg]`
+      );
+      filterParts.push(`[bg][${overlayInputIdx}:v]overlay=0:0:shortest=1,format=yuv420p[v]`);
       if (tempVoiceFile) {
-        filterParts.push('[2:a]apad[a]');
+        filterParts.push(`[${audioInputIdx}:a]apad[a]`);
       }
 
       ffmpegArgs.push(
         '-filter_complex', filterParts.join(';'),
         '-map', '[v]',
-        '-map', tempVoiceFile ? '[a]' : '2:a'
+        '-map', tempVoiceFile ? '[a]' : `${audioInputIdx}:a`
       );
     } else {
       ffmpegArgs.push(
@@ -926,10 +1123,10 @@ export class ReelVideoRenderer {
       if (needsScale) {
         ctx.save();
         ctx.scale(scaleX, scaleY);
-        this.renderFrameByTheme(theme, ctx, refWidth, refHeight, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+        this.renderFrameByTheme(theme, ctx, refWidth, refHeight, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacingContext);
         ctx.restore();
       } else {
-        this.renderFrameByTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+        this.renderFrameByTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacingContext);
       }
 
       // Zero-copy raw RGBA buffer directly from canvas memory (0ms latency, zero compression overhead)
@@ -1016,11 +1213,13 @@ export class ReelVideoRenderer {
           fs.unlinkSync(tempVoiceFile);
         }
       } catch {}
-      try {
-        if (tempBgVideoFile && fs.existsSync(tempBgVideoFile)) {
-          fs.unlinkSync(tempBgVideoFile);
-        }
-      } catch {}
+      for (const bgFile of tempBgVideoFiles) {
+        try {
+          if (bgFile && fs.existsSync(bgFile)) {
+            fs.unlinkSync(bgFile);
+          }
+        } catch {}
+      }
     }
   }
 
@@ -1089,23 +1288,24 @@ export class ReelVideoRenderer {
     category: string,
     website: string,
     isEnglish: boolean = false,
-    hasVideoBg: boolean = false
+    hasVideoBg: boolean = false,
+    pacing?: ReelPacingContext
   ): void {
     if (theme === 'canva-studio-a') {
-      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacing);
       return;
     }
     if (theme === 'canva-studio-b') {
-      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacing);
       return;
     }
     if (theme === 'canva-studio-c') {
-      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacing);
       return;
     }
 
     if (height >= 1280 || height > width || theme === 'vertical-916') {
-      this.renderVerticalFrameWithTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+      this.renderVerticalFrameWithTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacing);
       return;
     }
 
@@ -1340,8 +1540,8 @@ export class ReelVideoRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(
       isEnglish
-        ? '🔴 TRENDING NEWS WORLD • GLOBAL NEWS DISPATCH'
-        : '💬 বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে • BD News 24/7',
+        ? '🔴 TRENDING NEWS WORLD • EDITORIAL BRIEFING'
+        : '🔴 BD NEWS 24/7 • সংবাদ বিশ্লেষণ ও প্রতিবেদন',
       width / 2,
       footerY + 45
     );
@@ -1365,7 +1565,8 @@ export class ReelVideoRenderer {
     category: string,
     website: string,
     isEnglish: boolean = false,
-    hasVideoBg: boolean = false
+    hasVideoBg: boolean = false,
+    pacing?: ReelPacingContext
   ): void {
     const activeCategoryKey = resolveCategoryTheme(category);
     const catStyle = CATEGORY_STYLES[activeCategoryKey] || CATEGORY_STYLES['cat-sports'];
@@ -1385,21 +1586,29 @@ export class ReelVideoRenderer {
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, width, height);
 
-    // 2. Full-Bleed Vertical Story Visual Stage (Y: 0 to 1320)
+    // 2. Full-Bleed Vertical Story Visual Stage (Y: 0 to 1320) with 3-5s cut alternation
     const stageH = 1320;
     if (hasVideoBg || articleImg) {
-      if (hasVideoBg) {
-        this.punchVideoStageWindow(ctx, 0, 0, width, stageH, 0);
-      }
-      ctx.save();
-      if (!hasVideoBg && articleImg) {
-        const easedProgress = 1 - Math.pow(1 - progress, 2.2);
-        const zoom = 1.0 + easedProgress * 0.16;
-        const panY = Math.sin(progress * Math.PI) * 28;
-        const panX = (progress - 0.5) * 24;
-        this.drawZoomedImage(ctx, articleImg, 0, 0, width, stageH, zoom, panY, panX);
-      }
+      this.renderStageVisualCut(
+        ctx,
+        0,
+        0,
+        width,
+        stageH,
+        0,
+        progress,
+        f,
+        articleImg,
+        hasVideoBg,
+        isEnglish,
+        brandText,
+        displayCategory,
+        strapBg,
+        strapAccent,
+        pacing
+      );
 
+      ctx.save();
       // Top subtle broadcast vignette for header bug clarity
       const topVig = ctx.createLinearGradient(0, 0, 0, 240);
       topVig.addColorStop(0, 'rgba(0,0,0,0.88)');
@@ -1409,16 +1618,16 @@ export class ReelVideoRenderer {
       ctx.fillRect(0, 0, width, 240);
 
       // Bottom dramatic studio gradient transitioning to headline card
-      const botVig = ctx.createLinearGradient(0, stageH - 350, 0, stageH);
+      const botVig = ctx.createLinearGradient(0, 960, 0, stageH);
       botVig.addColorStop(0, 'rgba(0,0,0,0)');
-      botVig.addColorStop(0.5, 'rgba(15, 23, 42, 0.7)');
+      botVig.addColorStop(0.55, 'rgba(15, 23, 42, 0.7)');
       botVig.addColorStop(1, '#090d16');
       ctx.fillStyle = botVig;
-      ctx.fillRect(0, stageH - 350, width, 350);
+      ctx.fillRect(0, 960, width, stageH - 960);
 
-      // Animated Live Audio Equalizer (giving visual feedback that male presenter voiceover is actively speaking)
+      // Animated Live Audio Equalizer above ticker (Y: 1210)
       const eqX = width - 210;
-      const eqY = stageH - 50;
+      const eqY = 1170;
       const numBars = 7;
       const barW = 8;
       const barGap = 6;
@@ -1448,6 +1657,7 @@ export class ReelVideoRenderer {
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(0, 0, width, stageH);
     }
+    this.drawEditorialCutOverlay(ctx, 0, width, 152, 1192, strapBg, strapAccent, progress, f, isEnglish, articleImg, hasVideoBg, pacing);
 
     // 3. Top Header Bug (Y: 60 to 140)
     const logoCenterY = 100;
@@ -1624,7 +1834,8 @@ export class ReelVideoRenderer {
     category: string,
     website: string,
     isEnglish: boolean = false,
-    hasVideoBg: boolean = false
+    hasVideoBg: boolean = false,
+    pacing?: ReelPacingContext
   ): void {
     const activeCategoryKey = resolveCategoryTheme(category);
     const catStyle = CATEGORY_STYLES[activeCategoryKey] || CATEGORY_STYLES['cat-sports'];
@@ -1712,30 +1923,36 @@ export class ReelVideoRenderer {
     const heroW = width - 80;
     const heroH = 1020;
 
-    if (hasVideoBg) {
-      this.punchVideoStageWindow(ctx, heroX, heroY, heroW, heroH, 22);
-    }
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(heroX, heroY, heroW, heroH, 22);
-    ctx.clip();
-
     if (hasVideoBg || articleImg) {
-      if (!hasVideoBg && articleImg) {
-        const easedProgress = 1 - Math.pow(1 - progress, 2.2);
-        const zoom = 1.0 + easedProgress * 0.16;
-        const panY = Math.sin(progress * Math.PI) * 28;
-        const panX = (progress - 0.5) * 24;
-        this.drawZoomedImage(ctx, articleImg, heroX, heroY, heroW, heroH, zoom, panY, panX);
-      }
+      this.renderStageVisualCut(
+        ctx,
+        heroX,
+        heroY,
+        heroW,
+        heroH,
+        22,
+        progress,
+        f,
+        articleImg,
+        hasVideoBg,
+        isEnglish,
+        brandText,
+        displayCategory,
+        strapBg,
+        strapAccent,
+        pacing
+      );
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(heroX, heroY, heroW, heroH, 22);
+      ctx.clip();
 
       // Dark gradient vignette
-      const artVig = ctx.createLinearGradient(0, heroY + heroH - 140, 0, heroY + heroH);
+      const artVig = ctx.createLinearGradient(0, heroY + heroH - 160, 0, heroY + heroH);
       artVig.addColorStop(0, 'rgba(0,0,0,0)');
-      artVig.addColorStop(1, 'rgba(0,0,0,0.85)');
+      artVig.addColorStop(1, 'rgba(0,0,0,0.88)');
       ctx.fillStyle = artVig;
-      ctx.fillRect(heroX, heroY + heroH - 140, heroW, 140);
+      ctx.fillRect(heroX, heroY + heroH - 160, heroW, 160);
 
       // Equalizer bars in corner
       const eqX = heroX + heroW - 170;
@@ -1745,7 +1962,12 @@ export class ReelVideoRenderer {
         ctx.fillStyle = strapAccent || '#38bdf8';
         ctx.fillRect(eqX + i * 14, eqY - bH, 8, bH);
       }
+      ctx.restore();
     } else {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(heroX, heroY, heroW, heroH, 22);
+      ctx.clip();
       ctx.fillStyle = '#1e293b';
       ctx.fillRect(heroX, heroY, heroW, heroH);
       ctx.fillStyle = '#94a3b8';
@@ -1753,8 +1975,9 @@ export class ReelVideoRenderer {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(brandText + ' • ' + displayCategory, heroX + heroW / 2, heroY + heroH / 2);
+      ctx.restore();
     }
-    ctx.restore();
+    this.drawEditorialCutOverlay(ctx, heroX, heroW, heroY + 20, heroY + heroH - 18, strapBg, strapAccent, progress, f, isEnglish, articleImg, hasVideoBg, pacing);
 
     ctx.strokeStyle = catStyle.cardBorder || 'rgba(234, 88, 12, 0.6)';
     ctx.lineWidth = 3;
@@ -1850,7 +2073,8 @@ export class ReelVideoRenderer {
     category: string,
     website: string,
     isEnglish: boolean = false,
-    hasVideoBg: boolean = false
+    hasVideoBg: boolean = false,
+    pacing?: ReelPacingContext
   ): void {
     const activeCategoryKey = resolveCategoryTheme(category);
     const catStyle = CATEGORY_STYLES[activeCategoryKey] || CATEGORY_STYLES['cat-sports'];
@@ -1876,30 +2100,36 @@ export class ReelVideoRenderer {
     const stageW = width - 80;
     const stageX = 40;
 
-    if (hasVideoBg) {
-      this.punchVideoStageWindow(ctx, stageX, stageY, stageW, stageH, 22);
-    }
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(stageX, stageY, stageW, stageH, 22);
-    ctx.clip();
-
     if (hasVideoBg || articleImg) {
-      if (!hasVideoBg && articleImg) {
-        const easedProgress = 1 - Math.pow(1 - progress, 2.2);
-        const zoom = 1.0 + easedProgress * 0.16;
-        const panY = Math.sin(progress * Math.PI) * 28;
-        const panX = (progress - 0.5) * 24;
-        this.drawZoomedImage(ctx, articleImg, stageX, stageY, stageW, stageH, zoom, panY, panX);
-      }
+      this.renderStageVisualCut(
+        ctx,
+        stageX,
+        stageY,
+        stageW,
+        stageH,
+        22,
+        progress,
+        f,
+        articleImg,
+        hasVideoBg,
+        isEnglish,
+        brandText,
+        displayCategory,
+        strapBg,
+        strapAccent,
+        pacing
+      );
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(stageX, stageY, stageW, stageH, 22);
+      ctx.clip();
 
       // Vignette
-      const artVig = ctx.createLinearGradient(0, stageY + stageH - 150, 0, stageY + stageH);
+      const artVig = ctx.createLinearGradient(0, stageY + stageH - 170, 0, stageY + stageH);
       artVig.addColorStop(0, 'rgba(0,0,0,0)');
-      artVig.addColorStop(1, 'rgba(0,0,0,0.85)');
+      artVig.addColorStop(1, 'rgba(0,0,0,0.88)');
       ctx.fillStyle = artVig;
-      ctx.fillRect(stageX, stageY + stageH - 150, stageW, 150);
+      ctx.fillRect(stageX, stageY + stageH - 170, stageW, 170);
 
       // Live Audio Equalizer
       const eqX = stageX + stageW - 180;
@@ -1909,7 +2139,12 @@ export class ReelVideoRenderer {
         ctx.fillStyle = strapAccent || '#38bdf8';
         ctx.fillRect(eqX + i * 14, eqY - bH, 8, bH);
       }
+      ctx.restore();
     } else {
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(stageX, stageY, stageW, stageH, 22);
+      ctx.clip();
       ctx.fillStyle = '#0f172a';
       ctx.fillRect(stageX, stageY, stageW, stageH);
       ctx.fillStyle = '#94a3b8';
@@ -1917,8 +2152,9 @@ export class ReelVideoRenderer {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(brandText + ' • ' + displayCategory, stageX + stageW / 2, stageY + stageH / 2);
+      ctx.restore();
     }
-    ctx.restore();
+    this.drawEditorialCutOverlay(ctx, stageX, stageW, stageY + 20, stageY + stageH - 18, strapBg, strapAccent, progress, f, isEnglish, articleImg, hasVideoBg, pacing);
 
     // Stage border
     ctx.strokeStyle = catStyle.cardBorder || 'rgba(234, 88, 12, 0.6)';
@@ -2063,18 +2299,19 @@ export class ReelVideoRenderer {
     category: string,
     website: string,
     isEnglish: boolean = false,
-    hasVideoBg: boolean = false
+    hasVideoBg: boolean = false,
+    pacing?: ReelPacingContext
   ): void {
     if (theme === 'canva-studio-a') {
-      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacing);
       return;
     }
     if (theme === 'canva-studio-b') {
-      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacing);
       return;
     }
     if (theme === 'canva-studio-c') {
-      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
+      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg, pacing);
       return;
     }
 
@@ -2236,26 +2473,28 @@ export class ReelVideoRenderer {
     ctx.fill();
     ctx.restore();
 
-    // 2. Full-Bleed News Visual Stage (0 to 1100px)
+    // 2. Full-Bleed News Visual Stage (0 to 1100px) with 3-5s cut pacing
     const photoH = 1100;
-    if (hasVideoBg) {
-      this.punchVideoStageWindow(ctx, 0, 0, width, photoH, 0);
-    } else if (articleImg) {
-      const easedProgress = 1 - Math.pow(1 - progress, 2.2);
-      const zoom = 1.0 + easedProgress * 0.16;
-      const panY = Math.sin(progress * Math.PI) * 32;
-      const panX = (progress - 0.5) * 26;
-      this.drawZoomedImage(ctx, articleImg, 0, 0, width, photoH, zoom, panY, panX);
-    } else {
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(0, 0, width, photoH);
-
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = isEnglish ? 'bold 38px sans-serif' : 'bold 38px "Hind Siliguri", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(isEnglish ? 'Trending News World • Top Headlines' : 'BD News 24/7 • শীর্ষ সংবাদ', width / 2, photoH / 2);
-    }
+    const vStageBrand = isEnglish ? 'TRENDING NEWS WORLD' : 'বিডি নিউজ ২৪/৭';
+    const vStageCat = isEnglish ? (isEnglishText(category) ? category.toUpperCase() : 'BREAKING NEWS') : (category || 'বিশেষ খবর');
+    this.renderStageVisualCut(
+      ctx,
+      0,
+      0,
+      width,
+      photoH,
+      0,
+      progress,
+      f,
+      articleImg,
+      hasVideoBg,
+      isEnglish,
+      vStageBrand,
+      vStageCat,
+      strapBg,
+      strapAccent,
+      pacing
+    );
 
     // Top subtle vignette for mobile header bug contrast (Y: 0 to 240)
     const topVig = ctx.createLinearGradient(0, 0, 0, 240);
@@ -2271,6 +2510,7 @@ export class ReelVideoRenderer {
     botVig.addColorStop(1, 'rgba(0, 0, 0, 0.94)');
     ctx.fillStyle = botVig;
     ctx.fillRect(0, photoH - 260, width, 260);
+    this.drawEditorialCutOverlay(ctx, 0, width, 180, photoH - 18, strapBg, strapAccent, progress, f, isEnglish, articleImg, hasVideoBg, pacing);
 
     // 3. Top Television Header Bug (Mobile Safe Zone: Y: 95 to 165 - safely below notch/dynamic island)
     ctx.save();
@@ -2465,8 +2705,8 @@ export class ReelVideoRenderer {
 
     // 6. Action & Source Bar (Safe Zone: Y = 1590 to 1650)
     const actionY = 1590;
-    const websitePillW = isEnglish ? 430 : 320;
-    const commentPillW = isEnglish ? 430 : 535;
+    const websitePillW = isEnglish ? 430 : 340;
+    const editorialPillW = isEnglish ? 420 : 495;
     ctx.save();
 
     // Website Pill (Left)
@@ -2490,31 +2730,26 @@ export class ReelVideoRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(cleanWebsite, 95, actionY + 29);
 
-    // Comment Link Pill (Right) - Ends at X: 915 to stay clear of Facebook Like button
-    const comPillX = width - 40 - 125 - commentPillW;
+    // Self-Contained Editorial Badge (Right) - Ends at X: 915 to stay clear of Facebook Like button
+    const edPillX = width - 40 - 125 - editorialPillW;
     ctx.fillStyle = commentPillBg;
     ctx.beginPath();
-    ctx.roundRect(comPillX, actionY, commentPillW, 58, 29);
+    ctx.roundRect(edPillX, actionY, editorialPillW, 58, 29);
     ctx.fill();
 
-    // Chat bubble vector icon
+    // Editorial briefing vector icon
     ctx.fillStyle = commentPillText;
-    const cIconX = comPillX + 34;
+    const cIconX = edPillX + 34;
     const cIconY = actionY + 29;
     ctx.beginPath();
-    ctx.roundRect(cIconX - 11, cIconY - 8, 20, 15, 4);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(cIconX - 3, cIconY + 7);
-    ctx.lineTo(cIconX - 7, cIconY + 11);
-    ctx.lineTo(cIconX + 1, cIconY + 7);
+    ctx.roundRect(cIconX - 10, cIconY - 9, 18, 18, 4);
     ctx.fill();
 
     ctx.fillStyle = commentPillText;
-    ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
+    ctx.font = isEnglish ? 'bold 21px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(isEnglish ? 'Full story in first comment' : 'বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে', cIconX + 18, actionY + 29);
+    ctx.fillText(isEnglish ? 'Context & Analysis Report' : 'প্রেক্ষাপট ও বিস্তারিত বিশ্লেষণ', cIconX + 18, actionY + 29);
     ctx.restore();
 
     // 7. Animated Video Progress Bar (Y = 1665)
@@ -2836,17 +3071,12 @@ export class ReelVideoRenderer {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
-    // Chat bubble vector icon
+    // Editorial badge icon
     ctx.fillStyle = '#0f172a';
     const cIconX = ribbonX + 28;
     const cIconY = footerY + footerH / 2;
     ctx.beginPath();
-    ctx.roundRect(cIconX - 10, cIconY - 8, 18, 13, 3);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(cIconX - 3, cIconY + 5);
-    ctx.lineTo(cIconX - 6, cIconY + 9);
-    ctx.lineTo(cIconX + 1, cIconY + 5);
+    ctx.roundRect(cIconX - 9, cIconY - 8, 16, 16, 3);
     ctx.fill();
 
     ctx.fillStyle = '#0f172a';
@@ -2854,7 +3084,7 @@ export class ReelVideoRenderer {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(
-      isEnglish ? 'Full Story in Comments' : 'বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে',
+      isEnglish ? 'Editorial Analysis Report' : 'সংবাদ ও প্রেক্ষাপট বিশ্লেষণ',
       cIconX + (isEnglish ? 14 : 18),
       footerY + footerH / 2 + 1
     );
@@ -3057,8 +3287,8 @@ export class ReelVideoRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(
       isEnglish
-        ? '🔴 TRENDING NEWS WORLD • TOP DISPATCHES • REAL-TIME GLOBAL UPDATES • FULL STORY IN COMMENTS 🔴'
-        : '🔴 BD NEWS 24/7 • শীর্ষ সংবাদ আপডেট • বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে 🔴',
+        ? '🔴 TRENDING NEWS WORLD • TOP DISPATCHES • REAL-TIME GLOBAL UPDATES • IN-DEPTH BRIEFING 🔴'
+        : '🔴 BD NEWS 24/7 • শীর্ষ সংবাদ ও প্রেক্ষাপট বিশ্লেষণ • ২৪ ঘণ্টা সম্প্রচার 🔴',
       width / 2 - tickerOffset + 150,
       990
     );
@@ -3279,7 +3509,7 @@ export class ReelVideoRenderer {
     ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 20px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(
-      isEnglish ? '💬 Full story in comments' : '💬 বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে',
+      isEnglish ? '📰 Editorial Briefing' : '📰 বিশেষ প্রতিবেদন ও বিশ্লেষণ',
       width - 45 - rightPillW / 2,
       footerY + 25
     );
@@ -3610,24 +3840,19 @@ export class ReelVideoRenderer {
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    // Vector Chat Bubble Icon
+    // Editorial Badge Icon
     ctx.fillStyle = style.gradientStops[1];
     const cIconX = rightPillX + (isEnglish ? 28 : 34);
     const cIconY = footerY + btnFloat + 26;
     ctx.beginPath();
-    ctx.roundRect(cIconX - 10, cIconY - 8, 18, 13, 3);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(cIconX - 3, cIconY + 5);
-    ctx.lineTo(cIconX - 6, cIconY + 9);
-    ctx.lineTo(cIconX + 1, cIconY + 5);
+    ctx.roundRect(cIconX - 9, cIconY - 8, 16, 16, 3);
     ctx.fill();
 
     ctx.fillStyle = style.gradientStops[0];
     ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 21px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(isEnglish ? 'Full Story in Comments' : 'বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে', cIconX + 16, cIconY);
+    ctx.fillText(isEnglish ? 'Special Editorial Report' : 'সংবাদ বিশ্লেষণ ও প্রেক্ষাপট', cIconX + 16, cIconY);
     ctx.restore();
   }
 
@@ -3861,7 +4086,7 @@ export class ReelVideoRenderer {
     ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(
-      isEnglish ? '💬 Full story in comments' : '💬 বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে',
+      isEnglish ? '📰 Verified Editorial Desk' : '📰 তথ্যবহুল সংবাদ বিশ্লেষণ',
       width - 40 - rightPillW / 2,
       pillY + 30
     );

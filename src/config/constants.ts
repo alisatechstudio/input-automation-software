@@ -12,7 +12,7 @@ export function resolveCategoryTheme(categoryName?: string): string {
   if (c.includes('অর্থনীতি') || c.includes('বাণিজ্য') || c.includes('econom') || c.includes('business')) return 'cat-economy';
   if (c.includes('আন্তর্জাতিক') || c.includes('বিশ্ব') || c.includes('internat') || c.includes('world')) return 'cat-international';
   if (c.includes('খেলা') || c.includes('sport')) return 'cat-sports';
-  if (c.includes('তথ্যপ্রযুক্তি') || c.includes('প্রযুক্তি') || c.includes('tech')) return 'cat-technology';
+  if (c.includes('তথ্যপ্রযুক্তি') || c.includes('প্রযুক্তি') || c.includes('বিজ্ঞান') || c.includes('tech') || c.includes('science') || c.includes('research') || c.includes('space')) return 'cat-technology';
   if (c.includes('বিনোদন') || c.includes('সিনেমা') || c.includes('নাটক') || c.includes('entertain')) return 'cat-entertainment';
   if (c.includes('মতামত') || c.includes('কলাম') || c.includes('opinion') || c.includes('editorial')) return 'cat-opinion';
   if (c.includes('ধর্ম') || c.includes('ইসলাম') || c.includes('relig')) return 'cat-religion';
@@ -20,7 +20,7 @@ export function resolveCategoryTheme(categoryName?: string): string {
   if (c.includes('চাকরি') || c.includes('নিয়োগ') || c.includes('job') || c.includes('career')) return 'cat-job';
   if (c.includes('জীবনযাপন') || c.includes('স্বাস্থ্য') || c.includes('লাইফস্টাইল') || c.includes('lifestyle') || c.includes('health')) return 'cat-lifestyle';
   if (c.includes('আজকের খেলা') || c.includes('ম্যাচ') || c.includes('match') || c.includes('ব্রেকিং') || c.includes('জরুরি')) return 'cat-todays-match';
-  return 'cat-bangladesh';
+  return isEnglishText(c) ? 'cat-international' : 'cat-bangladesh';
 }
 
 export interface GenerateViralHashtagsOptions {

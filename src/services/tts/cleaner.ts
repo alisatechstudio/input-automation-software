@@ -41,6 +41,9 @@ export function cleanSpeechScript(description?: string, headline?: string): stri
     .replace(/\((?:ছবি|ফাইল ছবি|সংগৃহীত|প্রতিনিধি|ছবি:)[^)]*\)/gi, '')
     .replace(/\((?:Photo|File Photo|Reuters|AFP|AP|Source)[^)]*\)/gi, '')
     .replace(/\[[^\]]*\]/g, '')
+    .replace(/\s*[-–|]?\s*Read the latest breaking report on[^.!\n]*[.!\n]?/gi, '')
+    .replace(/\b(?:Full\s+story\s+in\s+(?:the\s+)?(?:first\s+)?comments?|Link\s+in\s+comments?|Check\s+(?:the\s+)?comments?)\b[.!?]*/gi, '')
+    .replace(/বিস্তারিত\s*(?:পড়ুন|জানুন|দেখুন)?\s*কমেন্টে(?:\s*দে(?:য়া|ওয়া)\s*লিংকে)?[।.!?]*/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -49,4 +52,26 @@ export function cleanSpeechScript(description?: string, headline?: string): stri
   }
 
   return clean;
+}
+
+/**
+ * Removes an exact repeated headline prefix from cleaned RSS descriptions so editorial
+ * enrichment can detect thin snippet-only feeds.
+ */
+export function stripRepeatedHeadlinePrefix(cleanBody: string, headline: string): string {
+  const normBody = cleanBody.trim();
+  const normHead = (headline || '').trim();
+  if (!normBody || !normHead) return normBody;
+
+  const normalizeForCmp = (s: string) =>
+    s.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+  const cmpHead = normalizeForCmp(normHead);
+  const cmpBody = normalizeForCmp(normBody);
+  if (cmpBody === cmpHead) return '';
+
+  if (normBody.toLowerCase().startsWith(normHead.toLowerCase())) {
+    const remainder = normBody.slice(normHead.length).replace(/^[\s\-–:|—,.!?।]+/, '').trim();
+    return remainder;
+  }
+  return normBody;
 }
