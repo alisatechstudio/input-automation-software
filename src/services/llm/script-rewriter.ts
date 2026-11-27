@@ -1,7 +1,13 @@
 import { config } from '../../config/env.js';
 import { resolveCategoryTheme } from '../../config/constants.js';
 import { PixabayVideoService } from '../media/pixabay.js';
-import { cleanSpeechScript, isBengaliText, stripRepeatedHeadlinePrefix } from '../tts/cleaner.js';
+import {
+  cleanHeadlineForDisplay,
+  cleanSpeechScript,
+  isBengaliText,
+  stripRepeatedHeadlinePrefix,
+  trimToCompleteSentences,
+} from '../tts/cleaner.js';
 import { isLlmEndpointConfigured, resolveLlmEndpoint } from './client.js';
 
 export interface ReelScriptRewriteResult {
@@ -48,6 +54,11 @@ const EDITORIAL_CONTEXT_NOTES: Record<string, { en: string; bn: string }> = {
 };
 
 const TOPIC_EDITORIAL_NOTES: Array<{ pattern: RegExp; en: string; bn: string }> = [
+  {
+    pattern: /black friday|cyber monday|deals?|discount|walmart|amazon|shopping|sale/i,
+    en: 'Consumer analysts note that major retailers now spread seasonal markdowns across staggered waves, making it worthwhile to compare baseline price history before buying.',
+    bn: 'বাজার বিশ্লেষকদের মতে, বড় বিক্রেতারা এখন ধাপে ধাপে ছাড় দেয়, তাই কেনাকাটার আগে পণ্যের পূর্বের দাম যাচাই করে নেওয়া বুদ্ধিমানের কাজ।',
+  },
   {
     pattern: /study|research|scientist|genetic|biology|discovery|গবেষণা|বিজ্ঞান/i,
     en: 'Researchers emphasize that new empirical evidence continues to refine how we understand long-term natural and historical patterns.',
@@ -118,35 +129,43 @@ export class ScriptRewriterService {
     category?: string;
     isEnglish: boolean;
   }): ReelScriptRewriteResult {
-    const cleanDesc = cleanSpeechScript(input.description, input.headline);
-    const bodyOnly = stripRepeatedHeadlinePrefix(cleanDesc, input.headline);
+    const cleanHead = cleanHeadlineForDisplay(input.headline);
+    const cleanDesc = cleanSpeechScript(input.description, cleanHead);
+    const bodyOnly = stripRepeatedHeadlinePrefix(cleanDesc, cleanHead);
     const catKey = resolveCategoryTheme(input.category);
     const topicRule = TOPIC_EDITORIAL_NOTES.find((r) =>
-      r.pattern.test(`${input.headline} ${cleanDesc} ${input.category || ''}`)
+      r.pattern.test(`${cleanHead} ${cleanDesc} ${input.category || ''}`)
     );
     const contextNote =
       topicRule || EDITORIAL_CONTEXT_NOTES[catKey] || EDITORIAL_CONTEXT_NOTES['cat-international'];
 
-    let spokenScript = cleanDesc;
-    const isShortOrThin = !bodyOnly || bodyOnly.length < 95 || spokenScript.length < 150;
-    if (isShortOrThin) {
-      // Avoid trailing unpunctuated outlet-only tags (e.g. "...Doing It ScienceAlert") when description barely adds text
-      const trimmedBase = bodyOnly && bodyOnly.length < 28 ? input.headline.trim() : cleanDesc || input.headline.trim();
-      const endsWithPunct = /[।!?.\n]$/.test(trimmedBase);
-      const sep = endsWithPunct ? ' ' : input.isEnglish ? '. ' : '। ';
-      spokenScript = `${trimmedBase}${sep}${input.isEnglish ? contextNote.en : contextNote.bn}`;
+    const completeSentences = cleanDesc
+      .split(/(?<=[.!?।])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 25 && /[.!?।]$/.test(s));
+
+    let leadNarrative = completeSentences.slice(0, 2).join(' ').trim();
+    if (!leadNarrative) {
+      const baseLead = bodyOnly && bodyOnly.length >= 35 ? `${cleanHead}. ${bodyOnly}` : cleanHead;
+      leadNarrative = /[.!?।]$/.test(baseLead) ? baseLead : `${baseLead}${input.isEnglish ? '.' : '।'}`;
     }
 
-    if (process.env.VERCEL && spokenScript.length > 520) {
-      spokenScript = spokenScript.slice(0, 520).replace(/\s+\S*$/, '').trim();
+    const sep = /[.!?।]$/.test(leadNarrative) ? ' ' : input.isEnglish ? '. ' : '। ';
+    const needsContext = completeSentences.length < 3 || leadNarrative.length < 180;
+    let spokenScript = needsContext
+      ? `${leadNarrative}${sep}${input.isEnglish ? contextNote.en : contextNote.bn}`
+      : leadNarrative;
+
+    if (process.env.VERCEL) {
+      spokenScript = trimToCompleteSentences(spokenScript, 540);
     }
 
     const brollQueries = PixabayVideoService.extractTopicVisualQueries(
-      `${input.headline} ${cleanDesc}`,
+      `${cleanHead} ${cleanDesc}`,
       input.category
     );
 
-    const keyPoints = this.buildKeyPoints(input.headline, spokenScript, input.category, input.isEnglish);
+    const keyPoints = this.buildKeyPoints(cleanHead, spokenScript, input.category, input.isEnglish);
 
     return {
       spokenScript,
@@ -169,18 +188,19 @@ export class ScriptRewriterService {
       .filter((s) => s.length >= 16);
 
     const trimPoint = (text: string) =>
-      text.length > 72 ? `${text.slice(0, 69).replace(/\s+\S*$/, '').trim()}...` : text;
+      text.length > 68 ? `${text.slice(0, 65).replace(/\s+\S*$/, '').trim()}...` : text;
 
     const points: string[] = [];
-    if (clauses[0]) points.push(trimPoint(clauses[0]));
+    const leadDiffers = clauses[0] && clauses[0].slice(0, 25).toLowerCase() !== headline.slice(0, 25).toLowerCase();
+    if (leadDiffers && clauses[0]) points.push(trimPoint(clauses[0]));
     if (clauses[1]) points.push(trimPoint(clauses[1]));
     if (clauses[2]) points.push(trimPoint(clauses[2]));
 
     if (points.length < 2) {
       points.push(
         isEnglish
-          ? `${(category || 'News').toUpperCase()} Impact & Background Analysis`
-          : `${category || 'বিশেষ খবর'} • প্রেক্ষাপট ও মূল প্রভাব বিশ্লেষণ`
+          ? `${(category || 'Briefing').toUpperCase()} • Context & Key Takeaways`
+          : `${category || 'প্রতিবেদন'} • প্রেক্ষাপট ও মূল প্রভাব বিশ্লেষণ`
       );
     }
     return Array.from(new Set(points)).slice(0, 3);
@@ -192,25 +212,28 @@ export class ScriptRewriterService {
     fallback: ReelScriptRewriteResult
   ): Promise<{ result: ReelScriptRewriteResult | null; stopRetrying?: boolean }> {
     const langInstruction = input.isEnglish
-      ? 'Write spokenScript in crisp, insightful editorial broadcast English (3-4 natural sentences, 55-80 words): summarize the key event, explain broader context/impact (why it matters), and give an analytical takeaway. Never copy source boilerplate or mention comments.'
-      : 'Write spokenScript in natural, analytical Dhaka TV broadcast Bangla (Bengali script, 3-4 clear sentences, 55-80 words): cover the core event, background context, and public/policy significance. Never translate to English and never include any comment-link CTA.';
+      ? 'Synthesize an ORIGINAL, cohesive editorial commentary in natural English (3-4 complete sentences, 55-80 words). NEVER read raw RSS headlines verbatim, NEVER mention third-party outlets (NYT, CNN, Wirecutter, NBC, Google News), NEVER include truncated lists or comment CTAs, and NEVER claim to be a live broadcast.'
+      : 'Synthesize an ORIGINAL, analytical Dhaka editorial commentary in natural Bangla (Bengali script, 3-4 complete sentences, 55-80 words). Explain facts, context, and why it matters. Never copy aggregator fragments, mention external comment links, or claim live broadcast.';
 
     const keyPointInstruction = input.isEnglish
-      ? 'keyPoints: array of 3 concise on-screen editorial bullet phrases in English (5-9 words each) covering Facts, Context, and Impact.'
-      : 'keyPoints: array of 3 concise on-screen editorial bullet phrases in Bengali script (4-8 words each) covering মূল তথ্য, প্রেক্ষাপট, and প্রভাব।';
+      ? 'keyPoints: array of 3 clean on-screen editorial highlights in English (5-9 words each, proper spacing, zero publisher names).'
+      : 'keyPoints: array of 3 clean on-screen editorial highlights in Bengali script (4-8 words each).';
 
     const systemPrompt = [
-      'You are a television news editor writing original commentary scripts for short vertical video reports.',
+      'You are an editorial video scriptwriter producing original commentary reports.',
       'Return ONLY valid JSON: {"spokenScript":"...","brollQueries":["...","...","..."],"keyPoints":["...","...","..."]}.',
       langInstruction,
       keyPointInstruction,
-      'brollQueries MUST be an array of 3 distinct 2-4 word English stock-video searches matching concrete visuals of THIS exact story (avoid generic city skyline unless the story is about architecture/cities).',
+      'brollQueries MUST be an array of 3-4 distinct 2-4 word English stock-video searches matching THIS exact story topic (never generic skylines or unrelated circuit boards).',
     ].join(' ');
+
+    const cleanHead = cleanHeadlineForDisplay(input.headline);
+    const cleanSummary = cleanSpeechScript(input.description, cleanHead);
 
     const userPrompt = [
       `Category: ${input.category || 'News'}`,
-      `Headline: ${input.headline}`,
-      `Source Summary: ${(input.description || input.headline).slice(0, 1400)}`,
+      `Topic: ${cleanHead}`,
+      `Cleaned Context: ${cleanSummary.slice(0, 1400)}`,
     ].join('\n');
 
     try {
@@ -257,12 +280,12 @@ export class ScriptRewriterService {
       };
       let cleanedScript = cleanSpeechScript(
         (parsed.spokenScript || '').replace(/[*_`#"]/g, '').trim(),
-        input.headline
+        cleanHead
       );
 
       if (!cleanedScript || cleanedScript.length < 30) return { result: null };
-      if (process.env.VERCEL && cleanedScript.length > 560) {
-        cleanedScript = cleanedScript.slice(0, 560).replace(/\s+\S*$/, '').trim();
+      if (process.env.VERCEL) {
+        cleanedScript = trimToCompleteSentences(cleanedScript, 560);
       }
 
       const hasBengali = isBengaliText(cleanedScript);
@@ -288,7 +311,7 @@ export class ScriptRewriterService {
       const keyPoints =
         rawPoints.length >= 2
           ? rawPoints.slice(0, 3)
-          : this.buildKeyPoints(input.headline, cleanedScript, input.category, input.isEnglish);
+          : this.buildKeyPoints(cleanHead, cleanedScript, input.category, input.isEnglish);
 
       console.log(
         `[ScriptRewriter] ✨ Editorial script via ${model} (${cleanedScript.length} chars, shots=${brollQueries.length}, points=${keyPoints.length})`

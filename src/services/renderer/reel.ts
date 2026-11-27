@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { ScriptRewriterService } from '../llm/script-rewriter.js';
 import { PixabayVideoService } from '../media/pixabay.js';
 import { UnifiedTtsService } from '../tts/index.js';
+import { cleanHeadlineForDisplay } from '../tts/cleaner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -328,12 +329,18 @@ export function remotionSpring(options: {
   return Math.max(0, val);
 }
 
+interface CutSlotPlan {
+  kind: 'broll' | 'photo' | 'graphic';
+  brollIdx: number;
+}
+
 interface ReelPacingContext {
   durationSeconds: number;
   cutSeconds: number;
   numCuts: number;
   keyPoints: string[];
   brollCount: number;
+  cutPlan: CutSlotPlan[];
 }
 
 export class ReelVideoRenderer {
@@ -440,6 +447,8 @@ export class ReelVideoRenderer {
     numCuts: number;
     localProgress: number;
     showArticlePhoto: boolean;
+    showGraphicCard: boolean;
+    graphicVariant: number;
   } {
     const duration = pacing?.durationSeconds || 16;
     const cutSeconds = pacing?.cutSeconds || 4;
@@ -448,15 +457,21 @@ export class ReelVideoRenderer {
     const cutIdx = Math.min(numCuts - 1, Math.floor(elapsedSec / cutSeconds));
     const localProgress = Math.min(1, Math.max(0, (elapsedSec - cutIdx * cutSeconds) / Math.max(0.5, cutSeconds)));
 
-    // Interleave the real article photo cleanly on cut 1 (and every 3rd cut thereafter) alongside B-roll shots
-    const isPhotoBeat =
-      Boolean(articleImg) && (!hasVideoBg || (numCuts >= 2 && (cutIdx === 1 || (cutIdx >= 4 && cutIdx % 3 === 1))));
+    const slot = pacing?.cutPlan?.[cutIdx];
+    const showArticlePhoto = slot
+      ? slot.kind === 'photo'
+      : Boolean(articleImg) && (!hasVideoBg ? cutIdx % 2 === 0 : numCuts >= 2 && cutIdx === 1);
+    const showGraphicCard = slot
+      ? slot.kind === 'graphic'
+      : !showArticlePhoto && !hasVideoBg;
 
     return {
       cutIdx,
       numCuts,
       localProgress,
-      showArticlePhoto: isPhotoBeat,
+      showArticlePhoto,
+      showGraphicCard,
+      graphicVariant: cutIdx,
     };
   }
 
@@ -480,7 +495,7 @@ export class ReelVideoRenderer {
   ): void {
     const cut = this.getActiveCutState(progress, f, articleImg, hasVideoBg, pacing);
 
-    if (hasVideoBg && !cut.showArticlePhoto) {
+    if (hasVideoBg && !cut.showArticlePhoto && !cut.showGraphicCard) {
       if (radius > 0) {
         this.punchVideoStageWindow(ctx, x, y, w, h, radius);
       } else {
@@ -496,37 +511,173 @@ export class ReelVideoRenderer {
     }
 
     if (cut.showArticlePhoto && articleImg) {
-      const easedCut = 1 - Math.pow(1 - cut.localProgress, 2.0);
-      const cutVariant = cut.cutIdx % 3;
-      const zoom =
-        cutVariant === 0
-          ? 1.02 + easedCut * 0.14
-          : cutVariant === 1
-          ? 1.18 - easedCut * 0.12
-          : 1.06 + Math.sin(cut.localProgress * Math.PI) * 0.1;
-      const panX = cutVariant === 1 ? (0.5 - cut.localProgress) * 38 : (cut.localProgress - 0.5) * 30;
-      const panY = Math.sin(cut.localProgress * Math.PI) * (cutVariant === 2 ? -24 : 24);
-      this.drawZoomedImage(ctx, articleImg, x, y, w, h, zoom, panY, panX);
-    } else if (!hasVideoBg) {
-      ctx.fillStyle = '#0f172a';
+      // Transform the press photo inside a branded studio editorial frame rather than bare raw crop
+      const backdropGrad = ctx.createLinearGradient(x, y, x + w, y + h);
+      backdropGrad.addColorStop(0, '#090d16');
+      backdropGrad.addColorStop(1, '#1e1b4b');
+      ctx.fillStyle = backdropGrad;
       ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = isEnglish ? 'bold 36px sans-serif' : 'bold 40px "Hind Siliguri", sans-serif';
+
+      const framePadX = Math.round(w * 0.065);
+      const framePadTop = Math.max(150, Math.round(h * 0.14));
+      const framePadBot = Math.max(140, Math.round(h * 0.14));
+      const fw = Math.max(120, w - framePadX * 2);
+      const fh = Math.max(120, h - framePadTop - framePadBot);
+      const fx = x + framePadX;
+      const fy = y + framePadTop;
+
+      const easedCut = 1 - Math.pow(1 - cut.localProgress, 2.0);
+      const zoom = 1.03 + easedCut * 0.11;
+      const panX = (cut.localProgress - 0.5) * 26;
+      const panY = Math.sin(cut.localProgress * Math.PI) * 18;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.roundRect(fx, fy, fw, fh, 22);
+      ctx.clip();
+      this.drawZoomedImage(ctx, articleImg, fx, fy, fw, fh, zoom, panY, panX);
+      ctx.restore();
+
+      ctx.strokeStyle = strapAccent || '#f59e0b';
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.roundRect(fx, fy, fw, fh, 22);
+      ctx.stroke();
+
+      // Context caption strip beneath framed photo
+      const caption = (pacing?.keyPoints && pacing.keyPoints[0]) || `${brandText} • ${displayCategory}`;
+      const cleanCap = caption.length > 58 ? `${caption.slice(0, 55)}...` : caption;
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+      ctx.beginPath();
+      ctx.roundRect(fx, fy + fh + 16, fw, 52, 14);
+      ctx.fill();
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = isEnglish ? 'bold 21px sans-serif' : 'bold 23px "Hind Siliguri", sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(`${brandText} • ${displayCategory}`, x + w / 2, y + h / 2);
+      ctx.fillText(cleanCap, fx + fw / 2, fy + fh + 42);
+    } else if (cut.showGraphicCard) {
+      this.drawEditorialGraphicCard(
+        ctx,
+        x,
+        y,
+        w,
+        h,
+        cut.localProgress,
+        cut.graphicVariant,
+        isEnglish,
+        brandText,
+        displayCategory,
+        strapBg,
+        strapAccent,
+        pacing?.keyPoints || []
+      );
     }
     ctx.restore();
+  }
+
+  private drawEditorialGraphicCard(
+    ctx: any,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    localProgress: number,
+    variant: number,
+    isEnglish: boolean,
+    brandText: string,
+    displayCategory: string,
+    strapBg: string,
+    strapAccent: string,
+    keyPoints: string[]
+  ): void {
+    const palettes = [
+      ['#090d16', '#131d35', '#0b1120'],
+      ['#0f172a', '#1e1b4b', '#090d16'],
+      ['#042f2e', '#0f172a', '#020617'],
+    ];
+    const [c0, c1, c2] = palettes[variant % palettes.length];
+    const grad = ctx.createLinearGradient(x, y, x + w, y + h);
+    grad.addColorStop(0, c0);
+    grad.addColorStop(0.55, c1);
+    grad.addColorStop(1, c2);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, w, h);
+
+    // Subtle geometric accent lines
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 4; i++) {
+      const lx = x + w * (0.2 + i * 0.2);
+      ctx.beginPath();
+      ctx.moveTo(lx, y);
+      ctx.lineTo(lx - 120, y + h);
+      ctx.stroke();
+    }
+
+    const slideUp = (1 - Math.min(1, localProgress * 3)) * 18;
+    const centerY = y + h * 0.42 + slideUp;
+
+    const sectionTitlesEn = [
+      `${displayCategory} • BACKGROUND BRIEF`,
+      `${displayCategory} • KEY TAKEAWAYS`,
+      `${displayCategory} • IMPACT & OUTLOOK`,
+    ];
+    const sectionTitlesBn = [
+      `${displayCategory} • ঘটনার প্রেক্ষাপট`,
+      `${displayCategory} • মূল বিষয়বস্তু`,
+      `${displayCategory} • প্রভাব ও বিশ্লেষণ`,
+    ];
+    const headerTag = isEnglish
+      ? sectionTitlesEn[variant % sectionTitlesEn.length]
+      : sectionTitlesBn[variant % sectionTitlesBn.length];
+
+    ctx.font = isEnglish ? 'bold 24px sans-serif' : 'bold 26px "Hind Siliguri", sans-serif';
+    const tagW = Math.min(w - 100, ctx.measureText(headerTag).width + 44);
+    const tagX = x + (w - tagW) / 2;
+    const tagY = y + h * 0.22 + slideUp;
+    ctx.fillStyle = strapBg || '#2563eb';
+    ctx.beginPath();
+    ctx.roundRect(tagX, tagY, tagW, 46, 23);
+    ctx.fill();
+
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(headerTag, x + w / 2, tagY + 23);
+
+    const rotatedPoints =
+      keyPoints.length > 0
+        ? keyPoints.map((_, idx) => keyPoints[(idx + variant) % keyPoints.length]).slice(0, 3)
+        : [`${brandText} • ${displayCategory}`];
+    ctx.font = isEnglish ? 'bold 29px sans-serif' : 'bold 31px "Hind Siliguri", sans-serif';
+    ctx.textAlign = 'center';
+    rotatedPoints.forEach((pt, idx) => {
+      const boxY = centerY + idx * 102;
+      const boxW = w - 120;
+      const boxX = x + 60;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+      ctx.beginPath();
+      ctx.roundRect(boxX, boxY, boxW, 82, 16);
+      ctx.fill();
+      ctx.strokeStyle = idx === 0 ? strapAccent || '#f59e0b' : 'rgba(255, 255, 255, 0.14)';
+      ctx.lineWidth = idx === 0 ? 2 : 1;
+      ctx.stroke();
+
+      const cleanPt = pt.length > 56 ? `${pt.slice(0, 53)}...` : pt;
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillText(cleanPt, x + w / 2, boxY + 41);
+    });
   }
 
   private drawEditorialCutOverlay(
     ctx: any,
     stageX: number,
     stageW: number,
-    beatTopY: number,
+    _beatTopY: number,
     calloutBottomY: number,
     strapBg: string,
-    strapAccent: string,
+    _strapAccent: string,
     progress: number,
     f: number,
     isEnglish: boolean,
@@ -536,60 +687,33 @@ export class ReelVideoRenderer {
   ): void {
     const cut = this.getActiveCutState(progress, f, articleImg, hasVideoBg, pacing);
     const keyPoints = pacing?.keyPoints || [];
-    const beatTitlesEn = ['LEAD STORY', 'STORY VISUAL', 'KEY CONTEXT', 'IMPACT & ANALYSIS', 'OUTLOOK'];
-    const beatTitlesBn = ['মূল সংবাদ', 'ঘটনার চিত্র', 'মূল প্রেক্ষাপট', 'প্রভাব ও বিশ্লেষণ', 'সারসংক্ষেপ'];
+    if (cut.showGraphicCard || keyPoints.length === 0 || cut.cutIdx < 1) {
+      return;
+    }
 
-    const beatLabel = cut.showArticlePhoto
-      ? isEnglish
-        ? `SHOT ${cut.cutIdx + 1}/${cut.numCuts} • STORY PHOTO`
-        : `দৃশ্য ${cut.cutIdx + 1}/${cut.numCuts} • ঘটনার আলোকচিত্র`
-      : isEnglish
-      ? `SHOT ${cut.cutIdx + 1}/${cut.numCuts} • ${beatTitlesEn[cut.cutIdx % beatTitlesEn.length]}`
-      : `দৃশ্য ${cut.cutIdx + 1}/${cut.numCuts} • ${beatTitlesBn[cut.cutIdx % beatTitlesBn.length]}`;
-
-    // Beat badge at top-left of visible stage
+    const activePoint = keyPoints[(cut.cutIdx - 1) % keyPoints.length];
+    const maxBoxW = Math.max(260, stageW - 260);
     ctx.save();
-    ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 20px "Hind Siliguri", sans-serif';
-    const badgeW = Math.min(stageW - 60, ctx.measureText(beatLabel).width + 36);
-    const bx = stageX + 26;
-    const by = beatTopY;
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+    ctx.font = isEnglish ? 'bold 21px sans-serif' : 'bold 23px "Hind Siliguri", sans-serif';
+    const pointText = activePoint.length > 62 ? `${activePoint.slice(0, 59)}...` : activePoint;
+    const boxW = Math.min(maxBoxW, ctx.measureText(pointText).width + 52);
+    const boxX = stageX + 26;
+    const boxY = calloutBottomY - 56;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.86)';
     ctx.beginPath();
-    ctx.roundRect(bx, by, badgeW, 38, 19);
+    ctx.roundRect(boxX, boxY, boxW, 50, 12);
     ctx.fill();
-    ctx.strokeStyle = strapAccent || '#f59e0b';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+
+    ctx.fillStyle = strapBg || '#dc2626';
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, 8, 50, [12, 0, 0, 12]);
+    ctx.fill();
+
     ctx.fillStyle = '#f8fafc';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(beatLabel, bx + 18, by + 19);
-
-    // On subsequent cuts (cutIdx >= 1), render active key-context highlight callout cleanly above ticker
-    if (keyPoints.length > 0 && cut.cutIdx >= 1) {
-      const activePoint = keyPoints[(cut.cutIdx - 1) % keyPoints.length];
-      const maxBoxW = Math.max(260, stageW - 260);
-      ctx.font = isEnglish ? 'bold 21px sans-serif' : 'bold 23px "Hind Siliguri", sans-serif';
-      const pointText = activePoint.length > 62 ? `${activePoint.slice(0, 59)}...` : activePoint;
-      const boxW = Math.min(maxBoxW, ctx.measureText(pointText).width + 52);
-      const boxX = stageX + 26;
-      const boxY = calloutBottomY - 56;
-
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.84)';
-      ctx.beginPath();
-      ctx.roundRect(boxX, boxY, boxW, 50, 12);
-      ctx.fill();
-
-      ctx.fillStyle = strapBg || '#dc2626';
-      ctx.beginPath();
-      ctx.roundRect(boxX, boxY, 8, 50, [12, 0, 0, 12]);
-      ctx.fill();
-
-      ctx.fillStyle = '#f8fafc';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(pointText, boxX + 22, boxY + 25);
-    }
+    ctx.fillText(pointText, boxX + 22, boxY + 25);
     ctx.restore();
   }
 
@@ -796,7 +920,7 @@ export class ReelVideoRenderer {
     this.registerFonts();
 
     const rawTheme = input.theme || 'auto-category';
-    const headline = (input.headline || '').trim();
+    const headline = cleanHeadlineForDisplay(input.headline);
     const isEnglish = Boolean(
       input.isEnglish ||
       (input.website && input.website.includes('trendingnews')) ||
@@ -880,7 +1004,7 @@ export class ReelVideoRenderer {
         headline,
         seedText: `${headline} ${website}`,
         outputDir: tempOutputDir,
-        maxClips: 3,
+        maxClips: 4,
       }),
       input.imageUrl
         ? this.loadImageWithTimeout(input.imageUrl, 5000).catch((e: any) => {
@@ -952,28 +1076,53 @@ export class ReelVideoRenderer {
       }
 
       if (voiceDurationSecs > 0) {
-        // Match full voiceover readout while enforcing Meta Reels API's 3s minimum duration.
-        const matchedSeconds = Math.max(3, voiceDurationSecs);
+        // Add +0.65s tail padding after voiceover ends so AAC encoding never clips final words
+        const matchedSeconds = Math.max(3, voiceDurationSecs + 0.65);
         totalFrames = Math.max(1, Math.ceil(matchedSeconds * fps));
         durationSeconds = totalFrames / fps;
         console.log(
-          `[ReelVideoRenderer] ⏱️ Voiceover readout: ${voiceDurationSecs.toFixed(3)}s -> Reel duration matched: ${durationSeconds.toFixed(3)}s (${totalFrames} frames @ ${fps}fps)`
+          `[ReelVideoRenderer] ⏱️ Voiceover readout: ${voiceDurationSecs.toFixed(3)}s -> Reel duration matched (+0.65s tail): ${durationSeconds.toFixed(3)}s (${totalFrames} frames @ ${fps}fps)`
         );
       }
     }
 
-    const hasVideoBg = tempBgVideoFiles.length > 0;
     const numCuts = Math.max(1, Math.min(8, Math.ceil(durationSeconds / 4.5)));
     const cutSeconds = durationSeconds / numCuts;
+    const cutPlan: CutSlotPlan[] = [];
+    let nextBrollIdx = 0;
+    let photoUsed = false;
+    const hasPhotoAsset = Boolean(articleImg);
+
+    // Build single non-repeating cut sequence across unique B-rolls, transformed story photo (max once), and graphic cards
+    for (let i = 0; i < numCuts; i++) {
+      if (hasPhotoAsset && !photoUsed && (i === 1 || numCuts === 1)) {
+        cutPlan.push({ kind: 'photo', brollIdx: -1 });
+        photoUsed = true;
+      } else if (i === 2 && numCuts >= 3) {
+        cutPlan.push({ kind: 'graphic', brollIdx: -1 });
+      } else if (nextBrollIdx < tempBgVideoFiles.length) {
+        cutPlan.push({ kind: 'broll', brollIdx: nextBrollIdx });
+        nextBrollIdx++;
+      } else if (hasPhotoAsset && !photoUsed) {
+        cutPlan.push({ kind: 'photo', brollIdx: -1 });
+        photoUsed = true;
+      } else {
+        cutPlan.push({ kind: 'graphic', brollIdx: -1 });
+      }
+    }
+
+    const brollInputsCount = cutPlan.filter((c) => c.kind === 'broll').length;
+    const hasVideoBg = brollInputsCount > 0;
     const pacingContext: ReelPacingContext = {
       durationSeconds,
       cutSeconds,
       numCuts,
       keyPoints: rewriteResult.keyPoints,
       brollCount: tempBgVideoFiles.length,
+      cutPlan,
     };
 
-    // 4. Configure FFmpeg spawn arguments with multi-shot 3-5s cut sequencing
+    // 4. Configure FFmpeg spawn arguments with non-repeating multi-shot cut sequencing
     const numThreads = Math.min(2, os.cpus()?.length || 1);
     const ffmpegPreset = 'ultrafast';
     const ffmpegCrf = '26';
@@ -984,24 +1133,28 @@ export class ReelVideoRenderer {
       const stage = this.getVideoStageRect(theme, width, height, refWidth, refHeight);
       const filterParts: string[] = [];
       const concatLabels: string[] = [];
+      let ffInputIdx = 0;
 
       for (let i = 0; i < numCuts; i++) {
-        const clipPath = tempBgVideoFiles[i % tempBgVideoFiles.length];
+        const slot = cutPlan[i];
         const segDur = (cutSeconds + (i === numCuts - 1 ? 0.4 : 0)).toFixed(3);
-        ffmpegArgs.push('-stream_loop', '-1', '-t', segDur, '-i', clipPath);
-
-        const repeatRound = Math.floor(i / tempBgVideoFiles.length);
-        const cropVariant =
-          repeatRound > 0
-            ? `,crop=trunc(iw*0.8/2)*2:trunc(ih*0.8/2)*2${i % 2 === 1 ? ',hflip' : ''}`
-            : '';
-        filterParts.push(
-          `[${i}:v]trim=duration=${segDur},setpts=PTS-STARTPTS${cropVariant},scale=${stage.w}:${stage.h}:force_original_aspect_ratio=increase,crop=${stage.w}:${stage.h},fps=${fps},setsar=1[s${i}]`
-        );
+        if (slot.kind === 'broll') {
+          const clipPath = tempBgVideoFiles[slot.brollIdx];
+          ffmpegArgs.push('-stream_loop', '-1', '-t', segDur, '-i', clipPath);
+          filterParts.push(
+            `[${ffInputIdx}:v]trim=duration=${segDur},setpts=PTS-STARTPTS,scale=${stage.w}:${stage.h}:force_original_aspect_ratio=increase,crop=${stage.w}:${stage.h},fps=${fps},setsar=1[s${i}]`
+          );
+          ffInputIdx++;
+        } else {
+          // Photo and custom graphic cuts are opaque on the Canvas overlay, so avoid decoding redundant video
+          filterParts.push(
+            `color=c=black:s=${stage.w}x${stage.h}:r=${fps}:d=${segDur},setsar=1[s${i}]`
+          );
+        }
         concatLabels.push(`[s${i}]`);
       }
 
-      const overlayInputIdx = numCuts;
+      const overlayInputIdx = ffInputIdx;
       ffmpegArgs.push(
         '-f', 'rawvideo',
         '-pix_fmt', 'rgba',
@@ -1010,7 +1163,7 @@ export class ReelVideoRenderer {
         '-i', '-' // Transparent RGBA canvas overlay stream
       );
 
-      const audioInputIdx = numCuts + 1;
+      const audioInputIdx = ffInputIdx + 1;
       if (tempVoiceFile) {
         ffmpegArgs.push('-i', tempVoiceFile);
       } else {
@@ -1467,7 +1620,7 @@ export class ReelVideoRenderer {
     ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 24px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(isEnglish ? 'BREAKING' : 'ব্রেকিং নিউজ', 52, dotY);
+    ctx.fillText(isEnglish ? 'BRIEFING' : 'প্রতিবেদন', 52, dotY);
 
     // Vertical Divider Line after Badge
     ctx.fillStyle = strapAccent || '#facc15';
@@ -1481,8 +1634,8 @@ export class ReelVideoRenderer {
 
     const cleanCat = (categoryName || '').replace('ব্রেকিং নিউজ', 'বিশেষ খবর').trim() || (isEnglish ? 'NEWS' : 'বিশেষ খবর');
     const tickerText = isEnglish
-      ? `🔴 ${cleanCat.toUpperCase()} • 24/7 LIVE VERIFIED DISPATCH • REAL-TIME GLOBAL UPDATES • TRENDING NEWS WORLD • STAY INFORMED • `
-      : `🔴 ${cleanCat} ডেস্ক • ২৪ ঘণ্টা লাইভ আপডেট • দেশ ও প্রবাসের সব তাজা সংবাদ • চোখ রাখুন BD NEWS 24/7-এ • `;
+      ? `🔹 ${cleanCat.toUpperCase()} • DAILY EDITORIAL BRIEFING • CONTEXT & ANALYSIS • TRENDING NEWS WORLD • `
+      : `🔹 ${cleanCat} ডেস্ক • সংবাদ বিশ্লেষণ ও মূল প্রতিবেদন • দেশ ও প্রবাসের তথ্য • BD NEWS 24/7 • `;
 
     ctx.font = isEnglish ? 'bold 24px sans-serif' : 'bold 26px "Hind Siliguri", sans-serif';
     const textWidth = ctx.measureText(tickerText).width;
@@ -1687,7 +1840,7 @@ export class ReelVideoRenderer {
     ctx.shadowBlur = 0;
 
     // Category Pill (Top Right)
-    const pillLabel = isEnglish ? `LIVE • ${displayCategory}` : `${displayCategory} • লাইভ`;
+    const pillLabel = isEnglish ? `BRIEFING • ${displayCategory}` : `${displayCategory} • বিশ্লেষণ`;
     ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 24px "Hind Siliguri", sans-serif';
     const pillW = ctx.measureText(pillLabel).width + 55;
     const pillX = width - 45 - pillW;
@@ -1797,7 +1950,7 @@ export class ReelVideoRenderer {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(
-      isEnglish ? '🎙️ LIVE STUDIO BROADCAST' : '🎙️ সরাসরি স্টুডিও থেকে লাইভ পরিবেশনা',
+      isEnglish ? '🎙️ EDITORIAL COMMENTARY' : '🎙️ সম্পাদকীয় সংবাদ বিশ্লেষণ',
       cardX + 42,
       cardBadgeY + 19
     );
@@ -1893,7 +2046,7 @@ export class ReelVideoRenderer {
     ctx.fillText(brandText, 132, logoCenterY);
 
     // Category Pill (Top Right)
-    const pillLabel = isEnglish ? `LIVE • ${displayCategory}` : `${displayCategory} • বিশেষ সংবাদ`;
+    const pillLabel = isEnglish ? `BRIEFING • ${displayCategory}` : `${displayCategory} • বিশেষ সংবাদ`;
     ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 24px "Hind Siliguri", sans-serif';
     const pillW = ctx.measureText(pillLabel).width + 55;
     const pillX = width - 45 - pillW;
@@ -2188,7 +2341,7 @@ export class ReelVideoRenderer {
     ctx.fillText(brandText, 132, logoCenterY);
 
     // Category Pill (Top Right)
-    const pillLabel = isEnglish ? `LIVE • ${displayCategory}` : `${displayCategory} • বিশেষ প্রতিবেদন`;
+    const pillLabel = isEnglish ? `BRIEFING • ${displayCategory}` : `${displayCategory} • বিশেষ প্রতিবেদন`;
     ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 24px "Hind Siliguri", sans-serif';
     const pillW = ctx.measureText(pillLabel).width + 55;
     const pillX = width - 45 - pillW;
@@ -2326,7 +2479,7 @@ export class ReelVideoRenderer {
     let headlineColor = '#0f172a';
     let pillBg = '#ef4444';
     let pillText = '#ffffff';
-    let pillPrefix = isEnglish ? 'LIVE • ' : 'লাইভ • ';
+    let pillPrefix = isEnglish ? 'BRIEFING • ' : 'প্রতিবেদন • ';
     let commentPillBg = '#b91c1c';
     let commentPillText = '#ffffff';
     let ambientOrb1 = 'rgba(239, 68, 68, 0.22)';
@@ -2369,7 +2522,7 @@ export class ReelVideoRenderer {
       bgColors = ['#09090b', '#18181b', '#0f172a', '#020617'];
       strapBg = '#10b981';
       strapAccent = '#34d399';
-      strapText = isEnglish ? 'LIVE BULLETIN • WORLD EDITION' : 'লাইভ বুলেটিন | LIVE BULLETIN';
+      strapText = isEnglish ? 'EDITORIAL BULLETIN • WORLD EDITION' : 'সংবাদ বুলেটিন | EDITORIAL BULLETIN';
       deskColor = '#064e3b';
       cardBg = '#ffffff';
       cardBorderColor = 'rgba(16, 185, 129, 0.5)';
@@ -2440,7 +2593,7 @@ export class ReelVideoRenderer {
       headlineColor = '#064e3b';
       pillBg = '#059669';
       pillText = '#ffffff';
-      pillPrefix = isEnglish ? 'LIVE • ' : 'লাইভ • ';
+      pillPrefix = isEnglish ? 'REPORT • ' : 'প্রতিবেদন • ';
       commentPillBg = '#047857';
       commentPillText = '#ffffff';
       ambientOrb1 = 'rgba(16, 185, 129, 0.28)';
@@ -3287,8 +3440,8 @@ export class ReelVideoRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(
       isEnglish
-        ? '🔴 TRENDING NEWS WORLD • TOP DISPATCHES • REAL-TIME GLOBAL UPDATES • IN-DEPTH BRIEFING 🔴'
-        : '🔴 BD NEWS 24/7 • শীর্ষ সংবাদ ও প্রেক্ষাপট বিশ্লেষণ • ২৪ ঘণ্টা সম্প্রচার 🔴',
+        ? '🔹 TRENDING NEWS WORLD • DAILY EDITORIAL BRIEFING • CONTEXT & IN-DEPTH ANALYSIS 🔹'
+        : '🔹 BD NEWS 24/7 • শীর্ষ সংবাদ ও প্রেক্ষাপট বিশ্লেষণ • প্রতিদিন প্রতিবেদন 🔹',
       width / 2 - tickerOffset + 150,
       990
     );
@@ -3960,7 +4113,7 @@ export class ReelVideoRenderer {
     const displayCategory = isEnglish ? (isEnglishText(category) ? category.toUpperCase() : 'BREAKING NEWS') : category;
     ctx.fillStyle = '#ffffff';
     ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 24px "Hind Siliguri", sans-serif';
-    ctx.fillText(isEnglish ? 'LIVE BREAKING • ' + displayCategory : 'লাইভ ব্রেকিং • ' + category, width / 2 + 10, 279);
+    ctx.fillText(isEnglish ? 'DAILY BRIEFING • ' + displayCategory : 'সংবাদ প্রতিবেদন • ' + category, width / 2 + 10, 279);
     ctx.restore();
 
     // C. Massive Central Photo Box (1000x880)
@@ -4104,7 +4257,7 @@ export class ReelVideoRenderer {
     ctx.fillStyle = '#fca5a5';
     ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(isEnglish ? '🌐 Trending News World • Real-Time News Desk' : '🌐 BD News 24/7 • সরাসরি সংবাদ পরিবেশনা', width / 2, ribbonY + 30);
+    ctx.fillText(isEnglish ? '🌐 Trending News World • Editorial News Desk' : '🌐 BD News 24/7 • সম্পাদকীয় সংবাদ বিশ্লেষণ', width / 2, ribbonY + 30);
     ctx.restore();
   }
 }

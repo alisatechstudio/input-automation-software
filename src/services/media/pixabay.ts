@@ -24,37 +24,41 @@ interface PixabayVideoHit {
 }
 
 const CATEGORY_VIDEO_QUERIES: Record<string, string> = {
-  'cat-politics': 'parliament government building press briefing',
+  'cat-politics': 'microphone press conference journalism',
   'cat-economy': 'financial market trading chart business',
-  'cat-international': 'world map globe diplomacy conference',
+  'cat-international': 'world globe map conference table',
   'cat-sports': 'stadium sports football cricket action',
-  'cat-technology': 'technology computer code digital circuit',
+  'cat-technology': 'technology software workspace monitor',
   'cat-entertainment': 'cinema theater film stage spotlight',
-  'cat-opinion': 'newspaper journalism editorial microphone',
+  'cat-opinion': 'newspaper journalism editorial desk',
   'cat-religion': 'mosque architecture peaceful sunrise',
-  'cat-education': 'university campus lecture books',
+  'cat-education': 'university library books study',
   'cat-job': 'office workspace laptop business team',
-  'cat-lifestyle': 'wellness nature lifestyle morning',
-  'cat-todays-match': 'cricket football stadium crowd match',
-  'cat-bangladesh': 'television newsroom journalism studio',
+  'cat-lifestyle': 'wellness nature morning lifestyle',
+  'cat-todays-match': 'cricket football stadium match',
+  'cat-bangladesh': 'television news studio microphone',
 };
 
 const TOPIC_VISUAL_RULES: Array<{ pattern: RegExp; queries: string[] }> = [
+  {
+    pattern: /black friday|cyber monday|deals?|discount|shopping|sale|walmart|amazon|retail|gift|shop/i,
+    queries: ['shopping bags store retail', 'online shopping package delivery', 'retail checkout discount store', 'gift boxes retail sale'],
+  },
   {
     pattern: /drama|film|movie|cinema|actor|actress|series|music|concert|নাটক|সিনেমা|অভিন|শিল্পী|উন্মাদনা|বিয়ে|তারকা|বিনোদন/i,
     queries: ['cinema theater audience screen', 'film production camera stage'],
   },
   {
     pattern: /election|vote|referendum|parliament|minister|party|rally|protest|government|নির্বাচন|গণভোট|ভোট|সংসদ|রাজনীতি|আন্দোলন|মিছিল|দলীয়|মহাসচিব|বিএনপি|আওয়ামী|জামায়াত/i,
-    queries: ['parliament hall government podium', 'democracy voting civic rally'],
+    queries: ['microphone press conference speaker', 'newspaper studio podium interview', 'people walking public square', 'journalism camera news desk'],
   },
   {
     pattern: /garment|textile|factory|export|worker|পোশাক|গার্মেন্টস|শ্রমিক|কারখানা|রপ্তানি/i,
     queries: ['textile garment sewing factory', 'shipping cargo port containers'],
   },
   {
-    pattern: /laptop|black friday|deal|retail|shopping|stock|market|inflation|bank|economy|শেয়ার|অর্থনীতি|বাজার|ব্যবসা|ব্যাংক/i,
-    queries: ['stock market chart trading', 'laptop workspace technology retail'],
+    pattern: /stock|market|dow|nasdaq|inflation|bank|economy|শেয়ার|অর্থনীতি|বাজার|ব্যবসা|ব্যাংক/i,
+    queries: ['stock market chart trading', 'financial business data analysis'],
   },
   {
     pattern: /storm|power|outage|blackout|hurricane|flood|rain|weather|climate|ঝড়|বৃষ্টি|বন্যা|বিদ্যুৎ|আবহাওয়া/i,
@@ -78,7 +82,7 @@ const TOPIC_VISUAL_RULES: Array<{ pattern: RegExp; queries: string[] }> = [
   },
   {
     pattern: /war|border|diplomacy|london|india|pakistan|china|russia|ukraine|trump|যুদ্ধ|সীমান্ত|লন্ডন|ভারত|পাকিস্তান|যুক্তরাজ্য|আন্তর্জাতিক/i,
-    queries: ['diplomacy flags international summit', 'world globe map geopolitics'],
+    queries: ['world globe map geopolitics', 'newsroom studio broadcast desk'],
   },
   {
     pattern: /ai|artificial intelligence|cyber|software|tech|chip|nvidia|google|apple|প্রযুক্তি|ইন্টারনেট|মোবাইল/i,
@@ -87,6 +91,11 @@ const TOPIC_VISUAL_RULES: Array<{ pattern: RegExp; queries: string[] }> = [
 ];
 
 const UNRELATED_CITY_NOISE_RE = /\b(?:dubai|burj|skyscraper|aerial skyline)\b/i;
+const UNRELATED_ABSTRACT_NOISE_RE = /\b(?:circuit|motherboard|microchip|matrix|binary|cyberpunk|neon abstract|crypto|blockchain)\b/i;
+const HARDWARE_TECH_RE = /\b(?:chip|semiconductor|circuit|processor|cpu|gpu|blockchain|crypto|cybersecurity|software|ai|robot|প্রযুক্তি|চিপ)\b/i;
+const FOREIGN_COUNTRY_OR_FLAG_RE =
+  /\b(?:flag|flags|austria|vienna|london|greenwich|westminster|big ben|tower bridge|uk|britain|british|england|paris|eiffel|france|french|berlin|germany|german|usa|america|american|capitol|congress|white house|europe|european|italy|rome|spain|madrid|russia|moscow|kremlin|switzerland|canada|australia)\b/i;
+const BANGLADESH_CONTEXT_RE = /[\u0980-\u09FF]|bangladesh|dhaka|chattogram|chittagong|sylhet|rajshahi|khulna|bdnews/i;
 
 const MAX_VIDEO_BYTES = 15 * 1024 * 1024;
 const PREFERRED_VIDEO_BYTES = 5 * 1024 * 1024;
@@ -155,7 +164,7 @@ export class PixabayVideoService {
   }): Promise<string[]> {
     if (!this.isConfigured()) return [];
 
-    const maxClips = Math.max(1, Math.min(4, options.maxClips ?? 3));
+    const maxClips = Math.max(1, Math.min(4, options.maxClips ?? 4));
     const sanitizeQuery = (q?: string) =>
       (q || '').replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -244,6 +253,9 @@ export class PixabayVideoService {
     queryText: string = ''
   ): { id: number; url: string } | null {
     const wantsCity = UNRELATED_CITY_NOISE_RE.test(queryText);
+    const wantsTechAbstract = HARDWARE_TECH_RE.test(`${seedText} ${queryText}`);
+    const isBanglaOrLocal = BANGLADESH_CONTEXT_RE.test(seedText);
+    const storyExplicitlyMentionsForeignPlace = FOREIGN_COUNTRY_OR_FLAG_RE.test(`${seedText} ${queryText}`);
 
     const mapped = hits
       .filter((hit) => !excludeIds.has(hit.id))
@@ -266,11 +278,19 @@ export class PixabayVideoService {
 
     if (mapped.length === 0) return null;
 
-    // Avoid off-topic skyline/Dubai B-roll unless the story specifically calls for it
-    const topicFiltered = wantsCity
-      ? mapped
-      : mapped.filter((v) => !UNRELATED_CITY_NOISE_RE.test(v.tags));
-    const basePool = topicFiltered.length > 0 ? topicFiltered : mapped;
+    // Avoid off-topic skyline, circuit-board, or foreign flags/landmarks (e.g. London/Austria on BD news)
+    const topicFiltered = mapped.filter((v) => {
+      if (!wantsCity && UNRELATED_CITY_NOISE_RE.test(v.tags)) return false;
+      if (!wantsTechAbstract && UNRELATED_ABSTRACT_NOISE_RE.test(v.tags)) return false;
+      if ((isBanglaOrLocal || !storyExplicitlyMentionsForeignPlace) && FOREIGN_COUNTRY_OR_FLAG_RE.test(v.tags)) {
+        return false;
+      }
+      return true;
+    });
+    if (topicFiltered.length === 0) {
+      return null;
+    }
+    const basePool = topicFiltered;
 
     const longEnough = basePool.filter((v) => v.duration >= 4);
     const pool = longEnough.length > 0 ? longEnough : basePool;
