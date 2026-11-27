@@ -8,6 +8,8 @@ import { createCanvas, GlobalFonts, loadImage } from '@napi-rs/canvas';
 import { config } from '../../config/env.js';
 import { resolveCategoryTheme, isEnglishText } from '../../config/constants.js';
 import { createRequire } from 'node:module';
+import { ScriptRewriterService } from '../llm/script-rewriter.js';
+import { PixabayVideoService } from '../media/pixabay.js';
 import { UnifiedTtsService } from '../tts/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -329,6 +331,8 @@ export function remotionSpring(options: {
 export class ReelVideoRenderer {
   private fontsRegistered: boolean = false;
   private ttsService: UnifiedTtsService;
+  private pixabayService: PixabayVideoService;
+  private scriptRewriter: ScriptRewriterService;
   private static cachedAnchorImages: any[] | null = null;
   private static rotationCounter: number = 0;
 
@@ -354,6 +358,74 @@ export class ReelVideoRenderer {
   constructor() {
     this.registerFonts();
     this.ttsService = new UnifiedTtsService();
+    this.pixabayService = new PixabayVideoService();
+    this.scriptRewriter = new ScriptRewriterService();
+  }
+
+  private getDefaultDimensions(isVertical: boolean): { defaultWidth: number; defaultHeight: number } {
+    const isStandardDef =
+      process.env.REEL_RESOLUTION === '540p' ||
+      process.env.LOW_RES === 'true' ||
+      (config.REEL_RESOLUTION === '540p' && !process.env.REEL_RESOLUTION);
+    const isHighDef = !isStandardDef;
+    return {
+      defaultWidth: isHighDef ? 1080 : isVertical ? 540 : 1080,
+      defaultHeight: isHighDef ? (isVertical ? 1920 : 1080) : isVertical ? 960 : 1080,
+    };
+  }
+
+  private punchVideoStageWindow(
+    ctx: any,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    radius: number = 0
+  ): void {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    if (radius > 0) {
+      ctx.roundRect(x, y, w, h, radius);
+    } else {
+      ctx.rect(x, y, w, h);
+    }
+    ctx.fill();
+    ctx.restore();
+  }
+
+  private getVideoStageRect(
+    theme: ReelTheme | string,
+    width: number,
+    height: number,
+    refWidth: number,
+    refHeight: number
+  ): { x: number; y: number; w: number; h: number } {
+    let refRect = { x: 50, y: 95, w: 980, h: 410 };
+    if (theme === 'canva-studio-a') {
+      refRect = { x: 0, y: 0, w: 1080, h: 1320 };
+    } else if (theme === 'canva-studio-b') {
+      refRect = { x: 40, y: 160, w: 1000, h: 1020 };
+    } else if (theme === 'canva-studio-c') {
+      refRect = { x: 40, y: 140, w: 1000, h: 1040 };
+    } else if (refHeight >= 1280 || refHeight > refWidth || theme === 'vertical-916') {
+      refRect = { x: 0, y: 0, w: 1080, h: 1100 };
+    } else if (theme === 'studio-red') {
+      refRect = { x: 45, y: 88, w: 990, h: 405 };
+    } else if (theme === 'breaking-bold') {
+      refRect = { x: 40, y: 115, w: 1000, h: 420 };
+    } else if (theme === 'dark-cinema') {
+      refRect = { x: 45, y: 95, w: 990, h: 440 };
+    }
+
+    const sx = width / refWidth;
+    const sy = height / refHeight;
+    const x = Math.max(0, Math.round(refRect.x * sx));
+    const y = Math.max(0, Math.round(refRect.y * sy));
+    const evenW = Math.max(2, Math.min(width - x, (Math.round(refRect.w * sx) + 1) & ~1));
+    const evenH = Math.max(2, Math.min(height - y, (Math.round(refRect.h * sy) + 1) & ~1));
+    return { x, y, w: evenW, h: evenH };
   }
 
   private registerFonts(): void {
@@ -486,12 +558,8 @@ export class ReelVideoRenderer {
     const isExplicitlySquare = input.aspectRatio === '1:1' || Boolean(input.height && input.width && input.height === input.width && input.theme !== 'vertical-916');
     const isVertical = !isExplicitlySquare;
 
-    // Featherweight Resolution Profile:
-    // Defaults to 720x1280 (HD vertical) for 56% less CPU/RAM and 4x faster encoding on shared hosting / cPanel.
-    // Can be set to 1080p via REEL_RESOLUTION=1080p or HIGH_DEFINITION=true in .env.
-    const isHighDef = process.env.REEL_RESOLUTION === '1080p' || process.env.HIGH_DEFINITION === 'true';
-    const defaultWidth = isHighDef ? 1080 : (isVertical ? 540 : 1080);
-    const defaultHeight = isHighDef ? (isVertical ? 1920 : 1080) : (isVertical ? 960 : 1080);
+    // Full HD 1080x1920 by default (set REEL_RESOLUTION=540p for featherweight mode).
+    const { defaultWidth, defaultHeight } = this.getDefaultDimensions(isVertical);
 
     let width = input.width || defaultWidth;
     let height = input.height || defaultHeight;
@@ -565,12 +633,8 @@ export class ReelVideoRenderer {
     const isExplicitlySquare = input.aspectRatio === '1:1' || Boolean(input.height && input.width && input.height === input.width && input.theme !== 'vertical-916');
     const isVertical = !isExplicitlySquare;
 
-    // Featherweight Resolution Profile:
-    // Defaults to 720x1280 (HD vertical) for 56% less CPU/RAM and 4x faster encoding on shared hosting / cPanel.
-    // Can be set to 1080p via REEL_RESOLUTION=1080p or HIGH_DEFINITION=true in .env.
-    const isHighDef = process.env.REEL_RESOLUTION === '1080p' || process.env.HIGH_DEFINITION === 'true';
-    const defaultWidth = isHighDef ? 1080 : (isVertical ? 540 : 1080);
-    const defaultHeight = isHighDef ? (isVertical ? 1920 : 1080) : (isVertical ? 960 : 1080);
+    // Full HD 1080x1920 by default (set REEL_RESOLUTION=540p for featherweight mode).
+    const { defaultWidth, defaultHeight } = this.getDefaultDimensions(isVertical);
 
     let width = input.width || defaultWidth;
     let height = input.height || defaultHeight;
@@ -581,26 +645,13 @@ export class ReelVideoRenderer {
     const scaleY = height / refHeight;
     const needsScale = scaleX !== 1 || scaleY !== 1;
 
-    // Fallback reel duration (used only when no voiceover audio is generated)
-    let durationSeconds = input.durationSeconds ? Math.max(4, input.durationSeconds) : 5;
+    // Fallback reel duration (minimum 3s per Meta Reels API)
+    let durationSeconds = input.durationSeconds ? Math.max(3, input.durationSeconds) : 5;
     // Meta Reels strictly requires frame rate between 24 and 60 fps (Sub-24 fps triggers Error 1363129)
     const fps = 24;
     let totalFrames = Math.max(1, Math.round(durationSeconds * fps));
 
-    // 1. Preload article image
-    let articleImg: any = null;
-    if (input.imageUrl) {
-      try {
-        articleImg = await loadImage(input.imageUrl);
-      } catch (e: any) {
-        console.warn('[ReelVideoRenderer] Could not load article image for reel:', e.message);
-      }
-    }
-
-    // 2. Preload channel logo (English or Bengali channel)
-    const logoImg = await this.loadLogoImage(isEnglish);
-
-    // Temporary output file in /tmp or data directory
+    // Temporary output directory in /tmp or data directory
     const tempOutputDir = process.env.VERCEL ? '/tmp' : path.join(config.DATA_DIR, 'temp');
     if (!fs.existsSync(tempOutputDir)) {
       try {
@@ -609,27 +660,59 @@ export class ReelVideoRenderer {
     }
     const tempFile = path.join(tempOutputDir, `reel_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.mp4`);
 
-    // 3. Synthesize Voiceover: FreeLLMAPI -> ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Edge TTS fallback
+    // 1. Rewrite script into natural broadcast commentary + extract English B-roll search keywords
     let voiceoverBuffer = input.voiceoverBuffer || null;
     const textToSpeak = (input.description && input.description.trim()) ? input.description : headline;
-    if (!voiceoverBuffer && textToSpeak) {
-      let speechScript = this.ttsService.cleanDescription(textToSpeak, headline);
-      if (speechScript && !isEnglish && !/কমেন্টে দে(?:য়া|ওয়া) লিংকে/.test(speechScript)) {
-        const endsWithPunct = /[।!?.\n]$/.test(speechScript);
-        speechScript = `${speechScript}${endsWithPunct ? ' ' : '। '}বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে।`;
-      }
-      if (speechScript) {
-        try {
-          console.log(`[ReelVideoRenderer] 🎙️ Synthesizing news voiceover: "${speechScript.substring(0, 50)}..."`);
-          voiceoverBuffer = await this.ttsService.synthesize(speechScript, {
-            isEnglish,
-          });
-          if (voiceoverBuffer) {
-            console.log(`[ReelVideoRenderer] ✓ News voiceover generated successfully (${voiceoverBuffer.length} bytes)`);
-          }
-        } catch (ttsErr: any) {
-          console.warn('[ReelVideoRenderer] TTS voiceover note:', ttsErr.message);
-        }
+    const rewriteResult = await this.scriptRewriter.rewriteForReel({
+      headline,
+      description: input.description,
+      category,
+      isEnglish,
+    });
+
+    let speechScript = rewriteResult.spokenScript || this.ttsService.cleanDescription(textToSpeak, headline);
+    if (speechScript && !isEnglish && !/কমেন্টে দে(?:য়া|ওয়া) লিংকে/.test(speechScript)) {
+      const endsWithPunct = /[।!?.\n]$/.test(speechScript);
+      speechScript = `${speechScript}${endsWithPunct ? ' ' : '। '}বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে।`;
+    }
+
+    // 2. Fetch channel logo, Pixabay licensed B-roll video, and TTS voiceover in parallel
+    const [logoImg, tempBgVideoFile, synthesizedAudio] = await Promise.all([
+      this.loadLogoImage(isEnglish),
+      this.pixabayService.fetchBackgroundVideo({
+        query: rewriteResult.brollQuery,
+        category,
+        seedText: `${headline} ${website}`,
+        outputDir: tempOutputDir,
+      }),
+      !voiceoverBuffer && speechScript
+        ? (async () => {
+            try {
+              console.log(`[ReelVideoRenderer] 🎙️ Synthesizing news voiceover: "${speechScript.substring(0, 50)}..."`);
+              const audio = await this.ttsService.synthesize(speechScript, { isEnglish });
+              if (audio) {
+                console.log(`[ReelVideoRenderer] ✓ News voiceover generated successfully (${audio.length} bytes)`);
+              }
+              return audio;
+            } catch (ttsErr: any) {
+              console.warn('[ReelVideoRenderer] TTS voiceover note:', ttsErr.message);
+              return null;
+            }
+          })()
+        : Promise.resolve(null),
+    ]);
+
+    if (!voiceoverBuffer && synthesizedAudio) {
+      voiceoverBuffer = synthesizedAudio;
+    }
+
+    // Fallback to static article image only if no Pixabay B-roll video was found
+    let articleImg: any = null;
+    if (!tempBgVideoFile && input.imageUrl) {
+      try {
+        articleImg = await loadImage(input.imageUrl);
+      } catch (e: any) {
+        console.warn('[ReelVideoRenderer] Could not load fallback article image for reel:', e.message);
       }
     }
 
@@ -674,8 +757,9 @@ export class ReelVideoRenderer {
       }
 
       if (voiceDurationSecs > 0) {
-        // Reel length strictly matches the full description readout: not less, not more (<= 1 frame rounding).
-        totalFrames = Math.max(1, Math.ceil(voiceDurationSecs * fps));
+        // Match full voiceover readout while enforcing Meta Reels API's 3s minimum duration.
+        const matchedSeconds = Math.max(3, voiceDurationSecs);
+        totalFrames = Math.max(1, Math.ceil(matchedSeconds * fps));
         durationSeconds = totalFrames / fps;
         console.log(
           `[ReelVideoRenderer] ⏱️ Voiceover readout: ${voiceDurationSecs.toFixed(3)}s -> Reel duration matched: ${durationSeconds.toFixed(3)}s (${totalFrames} frames @ ${fps}fps)`
@@ -683,37 +767,71 @@ export class ReelVideoRenderer {
       }
     }
 
+    const hasVideoBg = Boolean(tempBgVideoFile);
+
     // 4. Configure FFmpeg spawn arguments with low-resource featherweight settings
     const numThreads = Math.min(2, os.cpus()?.length || 1);
     const ffmpegPreset = 'ultrafast';
     const ffmpegCrf = '26';
 
-    const ffmpegArgs = [
-      '-y',
-      '-threads', String(numThreads),
-      '-f', 'rawvideo',
-      '-pix_fmt', 'rgba',
-      '-s', `${width}x${height}`,
-      '-r', String(fps),
-      '-i', '-', // Zero-copy raw RGBA stream from stdin (Input 0)
-    ];
+    const ffmpegArgs: string[] = ['-y', '-threads', String(numThreads)];
 
-    // Use narration voiceover stream (FreeLLMAPI / ElevenLabs / Cartesia / Murf AI / EasyVoice / Edge TTS)
-    if (tempVoiceFile) {
+    if (hasVideoBg && tempBgVideoFile) {
+      const stage = this.getVideoStageRect(theme, width, height, refWidth, refHeight);
       ffmpegArgs.push(
-        '-i', tempVoiceFile, // Voiceover stream (Input 1)
-        '-af', 'apad',       // Pad with silence so video plays out full duration without early audio cut-off
-        '-map', '0:v',
-        '-map', '1:a'
+        '-stream_loop', '-1',
+        '-i', tempBgVideoFile, // Input 0: Looped Pixabay B-roll video
+        '-f', 'rawvideo',
+        '-pix_fmt', 'rgba',
+        '-s', `${width}x${height}`,
+        '-r', String(fps),
+        '-i', '-' // Input 1: Transparent RGBA canvas overlay stream
+      );
+
+      if (tempVoiceFile) {
+        ffmpegArgs.push('-i', tempVoiceFile); // Input 2: Voiceover audio
+      } else {
+        ffmpegArgs.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000');
+      }
+
+      const filterParts = [
+        `[0:v]scale=${stage.w}:${stage.h}:force_original_aspect_ratio=increase,crop=${stage.w}:${stage.h},fps=${fps},pad=${width}:${height}:${stage.x}:${stage.y}:black,setsar=1[bg]`,
+        `[bg][1:v]overlay=0:0:shortest=1,format=yuv420p[v]`,
+      ];
+      if (tempVoiceFile) {
+        filterParts.push('[2:a]apad[a]');
+      }
+
+      ffmpegArgs.push(
+        '-filter_complex', filterParts.join(';'),
+        '-map', '[v]',
+        '-map', tempVoiceFile ? '[a]' : '2:a'
       );
     } else {
-      // Silent stereo fallback if no voiceover text exists (Meta Reels strictly requires a stereo 48kHz audio track)
       ffmpegArgs.push(
-        '-f', 'lavfi',
-        '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
-        '-map', '0:v',
-        '-map', '1:a'
+        '-f', 'rawvideo',
+        '-pix_fmt', 'rgba',
+        '-s', `${width}x${height}`,
+        '-r', String(fps),
+        '-i', '-' // Zero-copy raw RGBA stream from stdin (Input 0)
       );
+
+      if (tempVoiceFile) {
+        ffmpegArgs.push(
+          '-i', tempVoiceFile, // Voiceover stream (Input 1)
+          '-af', 'apad',       // Pad with silence so video plays out full duration without early audio cut-off
+          '-map', '0:v',
+          '-map', '1:a'
+        );
+      } else {
+        // Silent stereo fallback if no voiceover text exists (Meta Reels strictly requires a stereo 48kHz audio track)
+        ffmpegArgs.push(
+          '-f', 'lavfi',
+          '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
+          '-map', '0:v',
+          '-map', '1:a'
+        );
+      }
     }
 
     ffmpegArgs.push(
@@ -782,10 +900,10 @@ export class ReelVideoRenderer {
       if (needsScale) {
         ctx.save();
         ctx.scale(scaleX, scaleY);
-        this.renderFrameByTheme(theme, ctx, refWidth, refHeight, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+        this.renderFrameByTheme(theme, ctx, refWidth, refHeight, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
         ctx.restore();
       } else {
-        this.renderFrameByTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+        this.renderFrameByTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       }
 
       // Zero-copy raw RGBA buffer directly from canvas memory (0ms latency, zero compression overhead)
@@ -795,8 +913,15 @@ export class ReelVideoRenderer {
           const ok = ffmpegProcess.stdin.write(frameBuffer);
           if (!ok && !isTerminated) {
             await new Promise<void>((res) => {
-              ffmpegProcess.stdin.once('drain', res);
-              setTimeout(res, 25);
+              const onDrain = () => {
+                clearTimeout(drainTimer);
+                res();
+              };
+              const drainTimer = setTimeout(() => {
+                ffmpegProcess.stdin?.off('drain', onDrain);
+                res();
+              }, 50);
+              ffmpegProcess.stdin.once('drain', onDrain);
             });
           }
         } else {
@@ -814,8 +939,8 @@ export class ReelVideoRenderer {
       }
     } catch {}
 
-    // Adaptive watchdog timer so longer description readouts finish cleanly within serverless limits
-    const watchdogMs = Math.min(55000, Math.max(20000, Math.ceil(durationSeconds * 2500)));
+    // Adaptive watchdog timer so 1080p + Pixabay compositing finishes cleanly within serverless limits
+    const watchdogMs = Math.min(55000, Math.max(25000, Math.ceil(durationSeconds * 3000)));
     const killWatchdog = setTimeout(() => {
       try {
         if (!ffmpegProcess.killed) {
@@ -862,6 +987,11 @@ export class ReelVideoRenderer {
       try {
         if (tempVoiceFile && fs.existsSync(tempVoiceFile)) {
           fs.unlinkSync(tempVoiceFile);
+        }
+      } catch {}
+      try {
+        if (tempBgVideoFile && fs.existsSync(tempBgVideoFile)) {
+          fs.unlinkSync(tempBgVideoFile);
         }
       } catch {}
     }
@@ -931,46 +1061,47 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     if (theme === 'canva-studio-a') {
-      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
     if (theme === 'canva-studio-b') {
-      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
     if (theme === 'canva-studio-c') {
-      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
 
     if (height >= 1280 || height > width || theme === 'vertical-916') {
-      this.renderVerticalFrameWithTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderVerticalFrameWithTheme(theme, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
 
     if (theme === 'auto-category' || (typeof theme === 'string' && theme.startsWith('cat-'))) {
       const resolvedKey = theme === 'auto-category' ? resolveCategoryTheme(category) : theme;
       const catStyle = CATEGORY_STYLES[resolvedKey] || CATEGORY_STYLES['cat-international'];
-      this.renderCategoryReelFrame(catStyle, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderCategoryReelFrame(catStyle, ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
 
     switch (theme) {
       case 'breaking-bold':
-        this.renderFrameBreakingBold(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+        this.renderFrameBreakingBold(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
         break;
       case 'dark-cinema':
-        this.renderFrameDarkCinema(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+        this.renderFrameDarkCinema(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
         break;
       case 'studio-red':
-        this.renderFrameStudioRed(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+        this.renderFrameStudioRed(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
         break;
       case 'viral-gradient':
       default:
-        this.renderCategoryReelFrame(CATEGORY_STYLES['cat-international'], ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+        this.renderCategoryReelFrame(CATEGORY_STYLES['cat-international'], ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
         break;
     }
   }
@@ -1182,7 +1313,7 @@ export class ReelVideoRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(
       isEnglish
-        ? '🔴 FOLLOW & SHARE • TRENDING NEWS WORLD'
+        ? '🔴 TRENDING NEWS WORLD • GLOBAL NEWS DISPATCH'
         : '💬 বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে • BD News 24/7',
       width / 2,
       footerY + 45
@@ -1206,7 +1337,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     const activeCategoryKey = resolveCategoryTheme(category);
     const catStyle = CATEGORY_STYLES[activeCategoryKey] || CATEGORY_STYLES['cat-sports'];
@@ -1228,13 +1360,18 @@ export class ReelVideoRenderer {
 
     // 2. Full-Bleed Vertical Story Visual Stage (Y: 0 to 1320)
     const stageH = 1320;
-    if (articleImg) {
+    if (hasVideoBg || articleImg) {
+      if (hasVideoBg) {
+        this.punchVideoStageWindow(ctx, 0, 0, width, stageH, 0);
+      }
       ctx.save();
-      const easedProgress = 1 - Math.pow(1 - progress, 2.2);
-      const zoom = 1.0 + easedProgress * 0.16;
-      const panY = Math.sin(progress * Math.PI) * 28;
-      const panX = (progress - 0.5) * 24;
-      this.drawZoomedImage(ctx, articleImg, 0, 0, width, stageH, zoom, panY, panX);
+      if (!hasVideoBg && articleImg) {
+        const easedProgress = 1 - Math.pow(1 - progress, 2.2);
+        const zoom = 1.0 + easedProgress * 0.16;
+        const panY = Math.sin(progress * Math.PI) * 28;
+        const panX = (progress - 0.5) * 24;
+        this.drawZoomedImage(ctx, articleImg, 0, 0, width, stageH, zoom, panY, panX);
+      }
 
       // Top subtle broadcast vignette for header bug clarity
       const topVig = ctx.createLinearGradient(0, 0, 0, 240);
@@ -1422,7 +1559,11 @@ export class ReelVideoRenderer {
     ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 20px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText('🎙️ সরাসরি স্টুডিও থেকে লাইভ পরিবেশনা', cardX + 42, cardBadgeY + 19);
+    ctx.fillText(
+      isEnglish ? '🎙️ LIVE STUDIO BROADCAST' : '🎙️ সরাসরি স্টুডিও থেকে লাইভ পরিবেশনা',
+      cardX + 42,
+      cardBadgeY + 19
+    );
 
     // Audio frequency bars in card
     const eqX = cardX + cardW - 140;
@@ -1455,7 +1596,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     const activeCategoryKey = resolveCategoryTheme(category);
     const catStyle = CATEGORY_STYLES[activeCategoryKey] || CATEGORY_STYLES['cat-sports'];
@@ -1543,17 +1685,23 @@ export class ReelVideoRenderer {
     const heroW = width - 80;
     const heroH = 1020;
 
+    if (hasVideoBg) {
+      this.punchVideoStageWindow(ctx, heroX, heroY, heroW, heroH, 22);
+    }
+
     ctx.save();
     ctx.beginPath();
     ctx.roundRect(heroX, heroY, heroW, heroH, 22);
     ctx.clip();
 
-    if (articleImg) {
-      const easedProgress = 1 - Math.pow(1 - progress, 2.2);
-      const zoom = 1.0 + easedProgress * 0.16;
-      const panY = Math.sin(progress * Math.PI) * 28;
-      const panX = (progress - 0.5) * 24;
-      this.drawZoomedImage(ctx, articleImg, heroX, heroY, heroW, heroH, zoom, panY, panX);
+    if (hasVideoBg || articleImg) {
+      if (!hasVideoBg && articleImg) {
+        const easedProgress = 1 - Math.pow(1 - progress, 2.2);
+        const zoom = 1.0 + easedProgress * 0.16;
+        const panY = Math.sin(progress * Math.PI) * 28;
+        const panX = (progress - 0.5) * 24;
+        this.drawZoomedImage(ctx, articleImg, heroX, heroY, heroW, heroH, zoom, panY, panX);
+      }
 
       // Dark gradient vignette
       const artVig = ctx.createLinearGradient(0, heroY + heroH - 140, 0, heroY + heroH);
@@ -1674,7 +1822,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     const activeCategoryKey = resolveCategoryTheme(category);
     const catStyle = CATEGORY_STYLES[activeCategoryKey] || CATEGORY_STYLES['cat-sports'];
@@ -1700,17 +1849,23 @@ export class ReelVideoRenderer {
     const stageW = width - 80;
     const stageX = 40;
 
+    if (hasVideoBg) {
+      this.punchVideoStageWindow(ctx, stageX, stageY, stageW, stageH, 22);
+    }
+
     ctx.save();
     ctx.beginPath();
     ctx.roundRect(stageX, stageY, stageW, stageH, 22);
     ctx.clip();
 
-    if (articleImg) {
-      const easedProgress = 1 - Math.pow(1 - progress, 2.2);
-      const zoom = 1.0 + easedProgress * 0.16;
-      const panY = Math.sin(progress * Math.PI) * 28;
-      const panX = (progress - 0.5) * 24;
-      this.drawZoomedImage(ctx, articleImg, stageX, stageY, stageW, stageH, zoom, panY, panX);
+    if (hasVideoBg || articleImg) {
+      if (!hasVideoBg && articleImg) {
+        const easedProgress = 1 - Math.pow(1 - progress, 2.2);
+        const zoom = 1.0 + easedProgress * 0.16;
+        const panY = Math.sin(progress * Math.PI) * 28;
+        const panX = (progress - 0.5) * 24;
+        this.drawZoomedImage(ctx, articleImg, stageX, stageY, stageW, stageH, zoom, panY, panX);
+      }
 
       // Vignette
       const artVig = ctx.createLinearGradient(0, stageY + stageH - 150, 0, stageY + stageH);
@@ -1880,18 +2035,19 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     if (theme === 'canva-studio-a') {
-      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderCanvaStudioAFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
     if (theme === 'canva-studio-b') {
-      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderCanvaStudioBFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
     if (theme === 'canva-studio-c') {
-      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish);
+      this.renderCanvaStudioCFrame(ctx, width, height, progress, f, articleImg, logoImg, headline, category, website, isEnglish, hasVideoBg);
       return;
     }
 
@@ -2053,9 +2209,11 @@ export class ReelVideoRenderer {
     ctx.fill();
     ctx.restore();
 
-    // 2. Full-Bleed News Photo with Smooth Ken Burns Motion (0 to 1100px)
+    // 2. Full-Bleed News Visual Stage (0 to 1100px)
     const photoH = 1100;
-    if (articleImg) {
+    if (hasVideoBg) {
+      this.punchVideoStageWindow(ctx, 0, 0, width, photoH, 0);
+    } else if (articleImg) {
       const easedProgress = 1 - Math.pow(1 - progress, 2.2);
       const zoom = 1.0 + easedProgress * 0.16;
       const panY = Math.sin(progress * Math.PI) * 32;
@@ -2367,7 +2525,7 @@ export class ReelVideoRenderer {
     ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const followText = isEnglish ? '🔔 Follow & Share • Trending News World Official' : '🔔 ফলো ও শেয়ার করুন • BD News 24/7 অফিসিয়াল পেইজ';
+    const followText = isEnglish ? '🌐 Trending News World • Verified Broadcast' : '🌐 BD News 24/7 • ডিজিটাল সংবাদ পরিবেশনা';
     ctx.fillText(followText, width / 2, followY);
     ctx.restore();
   }
@@ -2386,7 +2544,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     // A. Studio Red Gradient Background
     const bgGrad = ctx.createRadialGradient(540, 360, 40, 540, 540, 780);
@@ -2430,7 +2589,9 @@ export class ReelVideoRenderer {
     ctx.roundRect(photoX, photoY, photoW, photoH, photoRadius);
     ctx.clip();
 
-    if (articleImg) {
+    if (hasVideoBg) {
+      this.punchVideoStageWindow(ctx, photoX, photoY, photoW, photoH, photoRadius);
+    } else if (articleImg) {
       const zoom = 1.0 + progress * 0.08;
       this.drawZoomedImage(ctx, articleImg, photoX, photoY, photoW, photoH, zoom);
     } else {
@@ -2479,7 +2640,7 @@ export class ReelVideoRenderer {
     ctx.font = '500 20px sans-serif';
     ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
     ctx.textAlign = 'right';
-    ctx.fillText(isEnglish ? 'LIKE & FOLLOW for updates' : 'LIKE & FOLLOW for more', width - 45, 52);
+    ctx.fillText(isEnglish ? 'TRENDING NEWS WORLD' : 'BD NEWS 24/7', width - 45, 52);
     ctx.restore();
 
     // D. Centered Brand Bar (Logo + Brand Name)
@@ -2687,7 +2848,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     // A. Dark TV Newsroom Background
     const bgRad = ctx.createRadialGradient(540, 540, 60, 540, 540, 750);
@@ -2742,10 +2904,14 @@ export class ReelVideoRenderer {
     ctx.roundRect(photoX, photoY, photoW, photoH, photoRadius);
     ctx.clip();
 
-    if (articleImg) {
-      const zoom = 1.0 + progress * 0.07;
-      const panY = -progress * 15;
-      this.drawZoomedImage(ctx, articleImg, photoX, photoY, photoW, photoH, zoom, panY);
+    if (hasVideoBg || articleImg) {
+      if (hasVideoBg) {
+        this.punchVideoStageWindow(ctx, photoX, photoY, photoW, photoH, photoRadius);
+      } else if (articleImg) {
+        const zoom = 1.0 + progress * 0.07;
+        const panY = -progress * 15;
+        this.drawZoomedImage(ctx, articleImg, photoX, photoY, photoW, photoH, zoom, panY);
+      }
 
       // Vignette gradient over bottom of photo
       const vig = ctx.createLinearGradient(0, photoY + photoH - 120, 0, photoY + photoH);
@@ -2864,7 +3030,7 @@ export class ReelVideoRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(
       isEnglish
-        ? '🔴 TRENDING NEWS WORLD • TOP DISPATCHES • FOLLOW FOR LIVE UPDATES • FULL STORY IN COMMENTS 🔴'
+        ? '🔴 TRENDING NEWS WORLD • TOP DISPATCHES • REAL-TIME GLOBAL UPDATES • FULL STORY IN COMMENTS 🔴'
         : '🔴 BD NEWS 24/7 • শীর্ষ সংবাদ আপডেট • বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে 🔴',
       width / 2 - tickerOffset + 150,
       990
@@ -2886,7 +3052,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     // A. Obsidian Background with Ambient Cyan Glow
     const bgRad = ctx.createRadialGradient(540, 200, 60, 540, 540, 800);
@@ -2946,7 +3113,9 @@ export class ReelVideoRenderer {
     ctx.roundRect(photoX, photoY, photoW, photoH, photoRadius);
     ctx.clip();
 
-    if (articleImg) {
+    if (hasVideoBg) {
+      this.punchVideoStageWindow(ctx, photoX, photoY, photoW, photoH, photoRadius);
+    } else if (articleImg) {
       const zoom = 1.0 + progress * 0.08;
       this.drawZoomedImage(ctx, articleImg, photoX, photoY, photoW, photoH, zoom);
     } else {
@@ -3105,7 +3274,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     // A. Multi-stop Category Background Gradient
     const bgGrad = ctx.createLinearGradient(0, 0, width, height);
@@ -3185,17 +3355,17 @@ export class ReelVideoRenderer {
     ctx.textBaseline = 'middle';
     ctx.fillText(displayCategory, beaconX + 16, beaconY);
 
-    // Top Right Follow CTA
+    // Top Right Brand Tag
     ctx.fillStyle = '#ffffff';
     ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'right';
     ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
     ctx.shadowBlur = 8;
-    ctx.fillText(isEnglish ? 'LIKE & FOLLOW' : 'লাইক ও ফলো করুন', width - 50, beaconY);
+    ctx.fillText(isEnglish ? 'DIGITAL EDITION' : 'ডিজিটাল সংস্করণ', width - 50, beaconY);
     ctx.restore();
 
-    // D. Floating 3D Framed Photo Box with Ken Burns Motion
-    const floatY = Math.sin(progress * Math.PI * 2) * 5;
+    // D. Floating 3D Framed Visual Stage
+    const floatY = hasVideoBg ? 0 : Math.sin(progress * Math.PI * 2) * 5;
     const photoX = 50;
     const photoY = 95 + floatY;
     const photoW = 980;
@@ -3213,13 +3383,15 @@ export class ReelVideoRenderer {
     ctx.fill();
     ctx.restore();
 
-    // Photo Image with Ken Burns Zoom & Subtle Pan
+    // Photo Image or Video Window
     ctx.save();
     ctx.beginPath();
     ctx.roundRect(photoX, photoY, photoW, photoH, photoRadius);
     ctx.clip();
 
-    if (articleImg) {
+    if (hasVideoBg) {
+      this.punchVideoStageWindow(ctx, photoX, photoY, photoW, photoH, photoRadius);
+    } else if (articleImg) {
       const zoom = 1.0 + progress * 0.08;
       const panY = Math.sin(progress * Math.PI) * 10;
       this.drawZoomedImage(ctx, articleImg, photoX, photoY, photoW, photoH, zoom, panY);
@@ -3446,7 +3618,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     this.renderCategoryReelFrame(
       CATEGORY_STYLES['cat-international'],
@@ -3460,7 +3633,8 @@ export class ReelVideoRenderer {
       headline,
       category,
       website,
-      isEnglish
+      isEnglish,
+      hasVideoBg
     );
   }
 
@@ -3478,7 +3652,8 @@ export class ReelVideoRenderer {
     headline: string,
     category: string,
     website: string,
-    isEnglish: boolean = false
+    isEnglish: boolean = false,
+    hasVideoBg: boolean = false
   ): void {
     // A. 9:16 Vertical Gradient Background (1080x1920)
     const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
@@ -3558,9 +3733,13 @@ export class ReelVideoRenderer {
     ctx.roundRect(photoX, photoY, photoW, photoH, photoRadius);
     ctx.clip();
 
-    if (articleImg) {
-      const zoom = 1.0 + progress * 0.08;
-      this.drawZoomedImage(ctx, articleImg, photoX, photoY, photoW, photoH, zoom);
+    if (hasVideoBg || articleImg) {
+      if (hasVideoBg) {
+        this.punchVideoStageWindow(ctx, photoX, photoY, photoW, photoH, photoRadius);
+      } else if (articleImg) {
+        const zoom = 1.0 + progress * 0.08;
+        this.drawZoomedImage(ctx, articleImg, photoX, photoY, photoW, photoH, zoom);
+      }
 
       // Dark vignette gradient at bottom
       const vig = ctx.createLinearGradient(0, photoY + photoH - 180, 0, photoY + photoH);
@@ -3673,7 +3852,7 @@ export class ReelVideoRenderer {
     ctx.fillStyle = '#fca5a5';
     ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(isEnglish ? '👆 Follow & Share • Trending News World Official Page' : '👆 ফলো ও শেয়ার করুন • BD News 24/7 অফিসিয়াল পেইজ', width / 2, ribbonY + 30);
+    ctx.fillText(isEnglish ? '🌐 Trending News World • Real-Time News Desk' : '🌐 BD News 24/7 • সরাসরি সংবাদ পরিবেশনা', width / 2, ribbonY + 30);
     ctx.restore();
   }
 }

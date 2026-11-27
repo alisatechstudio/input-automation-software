@@ -1,9 +1,8 @@
 import { config } from '../../config/env.js';
+import { isLlmEndpointConfigured, resolveLlmEndpoint } from '../llm/client.js';
 import { resolveTtsLanguage } from './cleaner.js';
 import { postTtsAudioRequest } from './http.js';
 import { SynthesisOptions } from './types.js';
-
-const LOOPBACK_URL_RE = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i;
 
 /**
  * Text-to-Speech adapter for OpenAI-compatible FreeLLMAPI `/v1/audio/speech` router endpoints.
@@ -26,12 +25,7 @@ export class FreeLlmApiTtsService {
   }
 
   public isConfigured(): boolean {
-    if (!this.apiKey || !this.baseUrl) return false;
-    // Avoid futile loopback calls on Vercel serverless unless a public/tunneled LLM_BASE_URL is provided.
-    if (process.env.VERCEL && LOOPBACK_URL_RE.test(this.baseUrl)) {
-      return false;
-    }
-    return true;
+    return isLlmEndpointConfigured(this.apiKey, this.baseUrl);
   }
 
   public getDefaultVoice(isEnglish: boolean = true): string {
@@ -39,9 +33,7 @@ export class FreeLlmApiTtsService {
   }
 
   private getSpeechUrl(): string {
-    return this.baseUrl.endsWith('/v1')
-      ? `${this.baseUrl}/audio/speech`
-      : `${this.baseUrl}/v1/audio/speech`;
+    return resolveLlmEndpoint(this.baseUrl, '/audio/speech');
   }
 
   public async synthesize(text: string, options?: SynthesisOptions): Promise<Buffer | null> {

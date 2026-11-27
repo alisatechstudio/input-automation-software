@@ -19,8 +19,12 @@ export interface InputAppConfig {
   MAX_ARTICLE_AGE_HOURS: number;
   REEL_DEFAULT_DURATION: number;
   REEL_DEFAULT_THEME: string;
+  REEL_RESOLUTION: string;
+  PIXABAY_API_KEY: string;
   LLM_API_KEY: string;
   LLM_BASE_URL: string;
+  LLM_CHAT_MODEL: string;
+  LLM_SCRIPT_REWRITE: boolean;
   LLM_TTS_MODEL: string;
   LLM_TTS_MODEL_BN: string;
   LLM_TTS_VOICE: string;
@@ -82,8 +86,12 @@ export const config: InputAppConfig = {
   MAX_ARTICLE_AGE_HOURS: process.env.MAX_ARTICLE_AGE_HOURS ? parseInt(process.env.MAX_ARTICLE_AGE_HOURS, 10) : 24,
   REEL_DEFAULT_DURATION: process.env.REEL_DEFAULT_DURATION ? parseInt(process.env.REEL_DEFAULT_DURATION, 10) : 8,
   REEL_DEFAULT_THEME: process.env.REEL_DEFAULT_THEME || 'canva-studio-rotate',
+  REEL_RESOLUTION: process.env.REEL_RESOLUTION || '1080p',
+  PIXABAY_API_KEY: process.env.PIXABAY_API_KEY || '',
   LLM_API_KEY: process.env.LLM_API_KEY || process.env.FREELMAPI_API_KEY || '',
   LLM_BASE_URL: process.env.LLM_BASE_URL || process.env.FREELMAPI_BASE_URL || 'http://127.0.0.1:31415/v1',
+  LLM_CHAT_MODEL: process.env.LLM_CHAT_MODEL || process.env.FREELMAPI_CHAT_MODEL || 'mistral-small-3.2-24b',
+  LLM_SCRIPT_REWRITE: process.env.LLM_SCRIPT_REWRITE !== 'false',
   LLM_TTS_MODEL: process.env.LLM_TTS_MODEL || process.env.FREELMAPI_TTS_MODEL || 'auto',
   LLM_TTS_MODEL_BN:
     process.env.LLM_TTS_MODEL_BN ||
