@@ -10,11 +10,24 @@ import {
 } from '../tts/cleaner.js';
 import { isLlmEndpointConfigured, resolveLlmEndpoint } from './client.js';
 
+export interface StoryMetric {
+  label: string;
+  value: string;
+  numericValue?: number;
+}
+
+export interface StorySubject {
+  name: string;
+  role: string;
+}
+
 export interface ReelScriptRewriteResult {
   spokenScript: string;
   brollQuery: string;
   brollQueries: string[];
   keyPoints: string[];
+  metrics: StoryMetric[];
+  subjects: StorySubject[];
   rewrittenByLlm: boolean;
 }
 
@@ -44,8 +57,8 @@ const EDITORIAL_CONTEXT_NOTES: Record<string, { en: string; bn: string }> = {
     bn: 'বিশেষজ্ঞরা মনে করেন, দৈনন্দিন অভ্যাস ও সচেতনতা দীর্ঘমেয়াদে আমাদের জীবনযাত্রায় সরাসরি প্রভাব ফেলে।',
   },
   'cat-entertainment': {
-    en: 'Audience engagement and cross-border streaming trends continue to reshape viewer preferences across the region.',
-    bn: 'সাম্প্রতিক দর্শক-আগ্রহ ও ডিজিটাল প্ল্যাটফর্মের প্রসার বিনোদন জগতে নতুন ধারার ইঙ্গিত দিচ্ছে।',
+    en: 'The project highlights how creative leadership and audience word-of-mouth can drive unexpected commercial momentum.',
+    bn: 'সুনির্দিষ্ট পরিকল্পনা ও দর্শকদের ইতিবাচক সাড়াই এই অভাবনীয় সাফল্যের পেছনে মূল চালিকাশক্তি হিসেবে কাজ করেছে।',
   },
   'cat-bangladesh': {
     en: 'Local stakeholders emphasize coordinated action and public accountability as follow-up steps take shape.',
@@ -123,6 +136,100 @@ export class ScriptRewriterService {
     return fallback;
   }
 
+  private parseNumericScale(rawNum: string, unit: string): number {
+    const ascii = rawNum
+      .replace(/[০-৯]/g, (d) => String('০১২৩৪৫৬৭৮৯'.indexOf(d)))
+      .replace(/,/g, '');
+    const base = parseFloat(ascii);
+    if (!Number.isFinite(base)) return 0;
+    const u = (unit || '').toLowerCase();
+    if (/কোটি|crore/.test(u)) return base * 10_000_000;
+    if (/লাখ|lakh/.test(u)) return base * 100_000;
+    if (/হাজার|thousand/.test(u)) return base * 1_000;
+    if (/billion/.test(u)) return base * 1_000_000_000;
+    if (/million/.test(u)) return base * 1_000_000;
+    return base;
+  }
+
+  private extractStoryMetrics(headline: string, body: string, isEnglish: boolean): StoryMetric[] {
+    const combined = `${headline} ${body}`.trim();
+    const metrics: StoryMetric[] = [];
+    const seenLabels = new Set<string>();
+
+    const tryPush = (label: string, rawNum: string, unit: string) => {
+      const key = label.toLowerCase();
+      if (seenLabels.has(key)) return;
+      seenLabels.add(key);
+      const valText = `${rawNum.trim()}${unit ? ` ${unit.trim()}` : ''}`.trim();
+      metrics.push({
+        label,
+        value: valText,
+        numericValue: this.parseNumericScale(rawNum, unit),
+      });
+    };
+
+    const numUnit = '([০-৯0-9][০-৯0-9.,]*)\\s*(কোটি|লাখ|হাজার|টাকা|ডলার|crore|lakh|million|billion|%)?';
+    // Check number-before-keyword first (e.g. "২ কোটি বাজেটে", "৪৫২ কোটির বক্স অফিস"), then keyword-before-number
+    const budgetBeforeRe = /([০-৯0-9][০-৯0-9.,]*)\s*(কোটি|লাখ|হাজার|crore|lakh|million|billion)\s*(?:টাকার|ডলারের)?\s*(?:বাজেট|বাজেটে|ব্যয়ে|খরচে|budget|cost)/i;
+    const budgetAfterRe = new RegExp(`(?:বাজেট|নির্মাণ ব্যয়|ব্যয়|খরচ|budget|cost)[^০-৯0-9।.]{0,20}${numUnit}`, 'i');
+    const revBeforeRe = /([০-৯0-9][০-৯0-9.,]*)\s*(কোটি|লাখ|হাজার|crore|lakh|million|billion)(?:র|ের)?\s*(?:টাকার)?\s*(?:বক্স অফিস|আয়|কালেকশন|box office|gross|revenue)/i;
+    const revAfterRe = new RegExp(`(?:বক্স অফিস|আয়|কালেকশন|উপার্জন|বিক্রি|box office|gross|revenue|earning)[^০-৯0-9।.]{0,24}${numUnit}`, 'i');
+
+    const bm = combined.match(budgetBeforeRe) || combined.match(budgetAfterRe);
+    if (bm) tryPush(isEnglish ? 'Budget' : 'বাজেট', bm[1], bm[2] || '');
+
+    const rm = combined.match(revBeforeRe) || combined.match(revAfterRe);
+    if (rm) tryPush(isEnglish ? 'Box Office' : 'বক্স অফিস আয়', rm[1], rm[2] || '');
+
+    if (metrics.length < 2) {
+      const genericNumRe = /([০-৯0-9][০-৯0-9.,]*)\s*(কোটি|লাখ|হাজার|শতাংশ|%|জন|টি|deals|percent|million|billion|crore)/gi;
+      let m: RegExpExecArray | null;
+      while ((m = genericNumRe.exec(combined)) !== null && metrics.length < 3) {
+        const valText = `${m[1]} ${m[2]}`.trim();
+        if (metrics.some((x) => x.value === valText)) continue;
+        const idx = m.index;
+        const snippetBefore = combined.slice(Math.max(0, idx - 32), idx).trim().split(/\s+/).slice(-2).join(' ');
+        const label = snippetBefore.replace(/[^\p{L}\p{N}\s-]/gu, '').trim() || (isEnglish ? 'Key Figure' : 'মূল পরিসংখ্যান');
+        tryPush(label.slice(0, 22), m[1], m[2]);
+      }
+    }
+
+    return metrics.slice(0, 3);
+  }
+
+  private extractStorySubjects(headline: string, body: string, isEnglish: boolean): StorySubject[] {
+    const combined = `${headline}. ${body}`;
+    const subjects: StorySubject[] = [];
+    const seen = new Set<string>();
+
+    if (!isEnglish) {
+      // Match Bangla patterns like "প্রযোজক সুমনা হক" or "সুমনা হক (প্রযোজক)" or "কৌশলবিদ তানিয়া রহমান"
+      const roleFirstRe = /(প্রযোজক|সহ-প্রযোজক|পরিচালক|কৌশলবিদ|অভিনেত্রী|অভিনেতা|প্রতিষ্ঠাতা|সিইও|চেয়ারম্যান|মহাসচিব|বিশ্লেষক|গবেষক|উপদেষ্টা|প্রধান|মুখপাত্র)\s+([\u0980-\u09FF]{2,}(?:\s+[\u0980-\u09FF]{2,}){1,2})/g;
+      let m: RegExpExecArray | null;
+      while ((m = roleFirstRe.exec(combined)) !== null && subjects.length < 3) {
+        const role = m[1].trim();
+        const name = m[2].replace(/(?:বলেন|জানান|মতে|এর|কে|ও|এবং).*$/, '').trim();
+        if (name.length >= 4 && !seen.has(name)) {
+          seen.add(name);
+          subjects.push({ name, role });
+        }
+      }
+    } else {
+      const enRoleRe = /\b(producer|director|strategist|founder|ceo|analyst|chair|president|lead)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b/gi;
+      let m: RegExpExecArray | null;
+      while ((m = enRoleRe.exec(combined)) !== null && subjects.length < 3) {
+        const role = m[1].trim();
+        const name = m[2].trim();
+        if (!seen.has(name)) {
+          seen.add(name);
+          subjects.push({ name, role });
+        }
+      }
+    }
+
+    return subjects;
+  }
+
   private buildEditorialFallback(input: {
     headline: string;
     description?: string;
@@ -144,20 +251,21 @@ export class ScriptRewriterService {
       .map((s) => s.trim())
       .filter((s) => s.length >= 25 && /[.!?।]$/.test(s));
 
-    let leadNarrative = completeSentences.slice(0, 2).join(' ').trim();
-    if (!leadNarrative) {
+    // When full article paragraphs are available (>= 2 real sentences), deliver actual story details
+    // (names, roles, figures) cleanly instead of appending generic filler sentences.
+    let spokenScript = '';
+    if (completeSentences.length >= 2) {
+      spokenScript = completeSentences.slice(0, 4).join(' ').trim();
+    } else {
       const baseLead = bodyOnly && bodyOnly.length >= 35 ? `${cleanHead}. ${bodyOnly}` : cleanHead;
-      leadNarrative = /[.!?।]$/.test(baseLead) ? baseLead : `${baseLead}${input.isEnglish ? '.' : '।'}`;
+      const leadNarrative = /[.!?।]$/.test(baseLead) ? baseLead : `${baseLead}${input.isEnglish ? '.' : '।'}`;
+      spokenScript = `${leadNarrative} ${input.isEnglish ? contextNote.en : contextNote.bn}`;
     }
 
-    const sep = /[.!?।]$/.test(leadNarrative) ? ' ' : input.isEnglish ? '. ' : '। ';
-    const needsContext = completeSentences.length < 3 || leadNarrative.length < 180;
-    let spokenScript = needsContext
-      ? `${leadNarrative}${sep}${input.isEnglish ? contextNote.en : contextNote.bn}`
-      : leadNarrative;
-
     if (process.env.VERCEL) {
-      spokenScript = trimToCompleteSentences(spokenScript, 540);
+      spokenScript = trimToCompleteSentences(spokenScript, 560);
+    } else {
+      spokenScript = trimToCompleteSentences(spokenScript, 760);
     }
 
     const brollQueries = PixabayVideoService.extractTopicVisualQueries(
@@ -166,12 +274,16 @@ export class ScriptRewriterService {
     );
 
     const keyPoints = this.buildKeyPoints(cleanHead, spokenScript, input.category, input.isEnglish);
+    const metrics = this.extractStoryMetrics(cleanHead, cleanDesc, input.isEnglish);
+    const subjects = this.extractStorySubjects(cleanHead, cleanDesc, input.isEnglish);
 
     return {
       spokenScript,
       brollQuery: brollQueries[0] || PixabayVideoService.getCategoryFallbackQuery(input.category),
       brollQueries,
       keyPoints,
+      metrics,
+      subjects,
       rewrittenByLlm: false,
     };
   }
@@ -212,19 +324,19 @@ export class ScriptRewriterService {
     fallback: ReelScriptRewriteResult
   ): Promise<{ result: ReelScriptRewriteResult | null; stopRetrying?: boolean }> {
     const langInstruction = input.isEnglish
-      ? 'Synthesize an ORIGINAL, cohesive editorial commentary in natural English (3-4 complete sentences, 55-80 words). NEVER read raw RSS headlines verbatim, NEVER mention third-party outlets (NYT, CNN, Wirecutter, NBC, Google News), NEVER include truncated lists or comment CTAs, and NEVER claim to be a live broadcast.'
-      : 'Synthesize an ORIGINAL, analytical Dhaka editorial commentary in natural Bangla (Bengali script, 3-4 complete sentences, 55-80 words). Explain facts, context, and why it matters. Never copy aggregator fragments, mention external comment links, or claim live broadcast.';
+      ? 'Synthesize an ORIGINAL, cohesive editorial commentary in natural English (3-4 complete sentences, 60-85 words). FULFILL THE HEADLINE HOOK DIRECTLY: explicitly name any key people, roles, organizations, or exact numbers from the story rather than ending on vague filler. NEVER mention third-party outlets or claim live broadcast.'
+      : 'Synthesize an ORIGINAL, analytical editorial commentary in natural Dhaka Bangla (Bengali script, 3-4 complete sentences, 60-85 words). শিরোনামের প্রতিশ্রুতি সরাসরি পূরণ করুন: নিবন্ধে থাকা ব্যক্তিদের নাম, তাঁদের ভূমিকা (যেমন প্রযোজক/কৌশলবিদ/বিশ্লেষক) ও গুরুত্বপূর্ণ সংখ্যা স্পষ্টভাবে উল্লেখ করুন; ডিজিটাল প্ল্যাটফর্ম বা সাধারণ অনুমানমূলক বুলি দিয়ে শেষ করবেন না।';
 
     const keyPointInstruction = input.isEnglish
-      ? 'keyPoints: array of 3 clean on-screen editorial highlights in English (5-9 words each, proper spacing, zero publisher names).'
-      : 'keyPoints: array of 3 clean on-screen editorial highlights in Bengali script (4-8 words each).';
+      ? 'keyPoints: array of 2-3 clean concise highlights (5-8 words). metrics: array of up to 3 {"label":"...","value":"..."} comparing key numbers (e.g. Budget vs Box Office). subjects: array of up to 3 {"name":"...","role":"..."} for key individuals named in the story.'
+      : 'keyPoints: array of 2-3 concise Bengali highlights. metrics: up to 3 {"label":"...","value":"..."} (যেমন {"label":"বাজেট","value":"২ কোটি"}, {"label":"বক্স অফিস","value":"৪৫২ কোটি"}). subjects: up to 3 {"name":"...","role":"..."} naming key individuals & roles.';
 
     const systemPrompt = [
-      'You are an editorial video scriptwriter producing original commentary reports.',
-      'Return ONLY valid JSON: {"spokenScript":"...","brollQueries":["...","...","..."],"keyPoints":["...","...","..."]}.',
+      'You are an editorial video scriptwriter producing factual, original commentary reports.',
+      'Return ONLY valid JSON: {"spokenScript":"...","brollQueries":["...","...","..."],"keyPoints":["..."],"metrics":[{"label":"...","value":"..."}],"subjects":[{"name":"...","role":"..."}]}.',
       langInstruction,
       keyPointInstruction,
-      'brollQueries MUST be an array of 3-4 distinct 2-4 word English stock-video searches matching THIS exact story topic (never generic skylines or unrelated circuit boards).',
+      'brollQueries MUST be 3-4 concise 2-4 word English stock-video searches matching THIS exact story (no generic skylines or unrelated foreign landmarks).',
     ].join(' ');
 
     const cleanHead = cleanHeadlineForDisplay(input.headline);
@@ -232,8 +344,8 @@ export class ScriptRewriterService {
 
     const userPrompt = [
       `Category: ${input.category || 'News'}`,
-      `Topic: ${cleanHead}`,
-      `Cleaned Context: ${cleanSummary.slice(0, 1400)}`,
+      `Headline Hook: ${cleanHead}`,
+      `Article Facts & Details: ${cleanSummary.slice(0, 2200)}`,
     ].join('\n');
 
     try {
@@ -246,13 +358,13 @@ export class ScriptRewriterService {
         body: JSON.stringify({
           model,
           temperature: 0.35,
-          max_tokens: model.includes('qwen') ? 1000 : 600,
+          max_tokens: model.includes('qwen') ? 1000 : 750,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
         }),
-        signal: AbortSignal.timeout(4000),
+        signal: AbortSignal.timeout(4500),
       });
 
       if (!response.ok) {
@@ -277,6 +389,8 @@ export class ScriptRewriterService {
         brollQuery?: string;
         brollQueries?: string[];
         keyPoints?: string[];
+        metrics?: Array<{ label?: string; value?: string }>;
+        subjects?: Array<{ name?: string; role?: string }>;
       };
       let cleanedScript = cleanSpeechScript(
         (parsed.spokenScript || '').replace(/[*_`#"]/g, '').trim(),
@@ -285,7 +399,9 @@ export class ScriptRewriterService {
 
       if (!cleanedScript || cleanedScript.length < 30) return { result: null };
       if (process.env.VERCEL) {
-        cleanedScript = trimToCompleteSentences(cleanedScript, 560);
+        cleanedScript = trimToCompleteSentences(cleanedScript, 580);
+      } else {
+        cleanedScript = trimToCompleteSentences(cleanedScript, 780);
       }
 
       const hasBengali = isBengaliText(cleanedScript);
@@ -313,8 +429,31 @@ export class ScriptRewriterService {
           ? rawPoints.slice(0, 3)
           : this.buildKeyPoints(cleanHead, cleanedScript, input.category, input.isEnglish);
 
+      const parsedMetrics: StoryMetric[] = Array.isArray(parsed.metrics)
+        ? parsed.metrics
+            .map((m) => ({
+              label: String(m?.label || '').trim(),
+              value: String(m?.value || '').trim(),
+              numericValue: this.parseNumericScale(String(m?.value || ''), String(m?.value || '')),
+            }))
+            .filter((m) => m.label && m.value)
+            .slice(0, 3)
+        : [];
+      const metrics = parsedMetrics.length > 0 ? parsedMetrics : fallback.metrics;
+
+      const parsedSubjects: StorySubject[] = Array.isArray(parsed.subjects)
+        ? parsed.subjects
+            .map((s) => ({
+              name: String(s?.name || '').trim(),
+              role: String(s?.role || '').trim(),
+            }))
+            .filter((s) => s.name && s.role)
+            .slice(0, 3)
+        : [];
+      const subjects = parsedSubjects.length > 0 ? parsedSubjects : fallback.subjects;
+
       console.log(
-        `[ScriptRewriter] ✨ Editorial script via ${model} (${cleanedScript.length} chars, shots=${brollQueries.length}, points=${keyPoints.length})`
+        `[ScriptRewriter] ✨ Editorial script via ${model} (${cleanedScript.length} chars, metrics=${metrics.length}, subjects=${subjects.length})`
       );
       return {
         result: {
@@ -322,6 +461,8 @@ export class ScriptRewriterService {
           brollQuery: brollQueries[0] || fallback.brollQuery,
           brollQueries,
           keyPoints,
+          metrics,
+          subjects,
           rewrittenByLlm: true,
         },
       };

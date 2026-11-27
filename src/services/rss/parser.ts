@@ -138,9 +138,16 @@ export class RssParserService {
   }
 
   public async scrapeOgImage(articleUrl: string): Promise<string | undefined> {
+    const details = await this.scrapeArticleDetails(articleUrl);
+    return details.imageUrl;
+  }
+
+  public async scrapeArticleDetails(
+    articleUrl: string
+  ): Promise<{ imageUrl?: string; fullText?: string }> {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1800);
+      const timeoutId = setTimeout(() => controller.abort(), 2600);
 
       const response = await fetch(articleUrl, {
         signal: controller.signal,
@@ -153,7 +160,7 @@ export class RssParserService {
       });
       clearTimeout(timeoutId);
 
-      if (!response.ok) return undefined;
+      if (!response.ok) return {};
 
       const html = await response.text();
       const $ = cheerio.load(html);
@@ -165,13 +172,28 @@ export class RssParserService {
         $('article img').first().attr('src') ||
         $('main img').first().attr('src');
 
-      if (ogImage && (ogImage.startsWith('http://') || ogImage.startsWith('https://'))) {
-        return ogImage;
-      }
+      const imageUrl =
+        ogImage && (ogImage.startsWith('http://') || ogImage.startsWith('https://'))
+          ? ogImage
+          : undefined;
+
+      // Extract clean article body paragraphs for sites whose RSS only exposes short teasers
+      const paragraphs = $('article p, .article-content p, .post-content p, main p, p')
+        .map((_, el) => $(el).text().replace(/\s+/g, ' ').trim())
+        .get()
+        .filter(
+          (p) =>
+            p.length >= 45 &&
+            !/©|copyright|সর্বস্বত্ব|cookie|privacy policy|read full article|see more headlines/i.test(p)
+        );
+
+      const uniqueParas = Array.from(new Set(paragraphs));
+      const fullText = uniqueParas.join(' ').slice(0, 2600).trim() || undefined;
+
+      return { imageUrl, fullText };
     } catch {
-      // Non-critical fallback failure
+      return {};
     }
-    return undefined;
   }
 
   private cleanText(text: string): string {

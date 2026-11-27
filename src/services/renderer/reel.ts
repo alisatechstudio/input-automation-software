@@ -8,10 +8,10 @@ import { createCanvas, GlobalFonts, loadImage } from '@napi-rs/canvas';
 import { config } from '../../config/env.js';
 import { resolveCategoryTheme, isEnglishText } from '../../config/constants.js';
 import { createRequire } from 'node:module';
-import { ScriptRewriterService } from '../llm/script-rewriter.js';
+import { ScriptRewriterService, StoryMetric, StorySubject } from '../llm/script-rewriter.js';
 import { PixabayVideoService } from '../media/pixabay.js';
 import { UnifiedTtsService } from '../tts/index.js';
-import { cleanHeadlineForDisplay } from '../tts/cleaner.js';
+import { cleanHeadlineForDisplay, formatScriptForTts } from '../tts/cleaner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -329,9 +329,12 @@ export function remotionSpring(options: {
   return Math.max(0, val);
 }
 
+type GraphicCardMode = 'metrics_chart' | 'subject_spotlight' | 'editorial_quote';
+
 interface CutSlotPlan {
   kind: 'broll' | 'photo' | 'graphic';
   brollIdx: number;
+  graphicMode?: GraphicCardMode;
 }
 
 interface ReelPacingContext {
@@ -339,6 +342,8 @@ interface ReelPacingContext {
   cutSeconds: number;
   numCuts: number;
   keyPoints: string[];
+  metrics: StoryMetric[];
+  subjects: StorySubject[];
   brollCount: number;
   cutPlan: CutSlotPlan[];
 }
@@ -449,6 +454,7 @@ export class ReelVideoRenderer {
     showArticlePhoto: boolean;
     showGraphicCard: boolean;
     graphicVariant: number;
+    graphicMode: GraphicCardMode;
   } {
     const duration = pacing?.durationSeconds || 16;
     const cutSeconds = pacing?.cutSeconds || 4;
@@ -464,6 +470,13 @@ export class ReelVideoRenderer {
     const showGraphicCard = slot
       ? slot.kind === 'graphic'
       : !showArticlePhoto && !hasVideoBg;
+    const graphicMode: GraphicCardMode =
+      slot?.graphicMode ||
+      ((pacing?.metrics?.length || 0) > 0
+        ? 'metrics_chart'
+        : (pacing?.subjects?.length || 0) > 0
+        ? 'subject_spotlight'
+        : 'editorial_quote');
 
     return {
       cutIdx,
@@ -472,6 +485,7 @@ export class ReelVideoRenderer {
       showArticlePhoto,
       showGraphicCard,
       graphicVariant: cutIdx,
+      graphicMode,
     };
   }
 
@@ -564,13 +578,16 @@ export class ReelVideoRenderer {
         w,
         h,
         cut.localProgress,
+        cut.graphicMode,
         cut.graphicVariant,
         isEnglish,
         brandText,
         displayCategory,
         strapBg,
         strapAccent,
-        pacing?.keyPoints || []
+        pacing?.keyPoints || [],
+        pacing?.metrics || [],
+        pacing?.subjects || []
       );
     }
     ctx.restore();
@@ -583,13 +600,16 @@ export class ReelVideoRenderer {
     w: number,
     h: number,
     localProgress: number,
+    graphicMode: GraphicCardMode,
     variant: number,
     isEnglish: boolean,
     brandText: string,
     displayCategory: string,
     strapBg: string,
     strapAccent: string,
-    keyPoints: string[]
+    keyPoints: string[],
+    metrics: StoryMetric[],
+    subjects: StorySubject[]
   ): void {
     const palettes = [
       ['#090d16', '#131d35', '#0b1120'],
@@ -605,7 +625,7 @@ export class ReelVideoRenderer {
     ctx.fillRect(x, y, w, h);
 
     // Subtle geometric accent lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
     ctx.lineWidth = 2;
     for (let i = 0; i < 4; i++) {
       const lx = x + w * (0.2 + i * 0.2);
@@ -615,58 +635,267 @@ export class ReelVideoRenderer {
       ctx.stroke();
     }
 
-    const slideUp = (1 - Math.min(1, localProgress * 3)) * 18;
-    const centerY = y + h * 0.42 + slideUp;
+    const ease = 1 - Math.pow(1 - Math.min(1, localProgress * 2.5), 3);
+    const slideUp = (1 - ease) * 22;
 
-    const sectionTitlesEn = [
-      `${displayCategory} • BACKGROUND BRIEF`,
-      `${displayCategory} • KEY TAKEAWAYS`,
-      `${displayCategory} • IMPACT & OUTLOOK`,
-    ];
-    const sectionTitlesBn = [
-      `${displayCategory} • ঘটনার প্রেক্ষাপট`,
-      `${displayCategory} • মূল বিষয়বস্তু`,
-      `${displayCategory} • প্রভাব ও বিশ্লেষণ`,
-    ];
-    const headerTag = isEnglish
-      ? sectionTitlesEn[variant % sectionTitlesEn.length]
-      : sectionTitlesBn[variant % sectionTitlesBn.length];
+    if (graphicMode === 'metrics_chart' && metrics.length > 0) {
+      this.drawMetricsComparisonGraphic(ctx, x, y, w, h, ease, slideUp, isEnglish, displayCategory, strapBg, strapAccent, metrics);
+      return;
+    }
 
+    if (graphicMode === 'subject_spotlight' && subjects.length > 0) {
+      this.drawSubjectSpotlightGraphic(ctx, x, y, w, h, ease, slideUp, isEnglish, displayCategory, strapBg, strapAccent, subjects);
+      return;
+    }
+
+    this.drawEditorialPullQuoteGraphic(
+      ctx,
+      x,
+      y,
+      w,
+      h,
+      slideUp,
+      isEnglish,
+      brandText,
+      displayCategory,
+      strapBg,
+      strapAccent,
+      keyPoints
+    );
+  }
+
+  private drawMetricsComparisonGraphic(
+    ctx: any,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    ease: number,
+    slideUp: number,
+    isEnglish: boolean,
+    displayCategory: string,
+    strapBg: string,
+    strapAccent: string,
+    metrics: StoryMetric[]
+  ): void {
+    const headerTag = isEnglish ? `${displayCategory} • BY THE NUMBERS` : `${displayCategory} • গুরুত্বপূর্ণ পরিসংখ্যান`;
     ctx.font = isEnglish ? 'bold 24px sans-serif' : 'bold 26px "Hind Siliguri", sans-serif';
     const tagW = Math.min(w - 100, ctx.measureText(headerTag).width + 44);
-    const tagX = x + (w - tagW) / 2;
     const tagY = y + h * 0.22 + slideUp;
-    ctx.fillStyle = strapBg || '#2563eb';
+    ctx.fillStyle = strapBg || '#dc2626';
     ctx.beginPath();
-    ctx.roundRect(tagX, tagY, tagW, 46, 23);
+    ctx.roundRect(x + (w - tagW) / 2, tagY, tagW, 46, 23);
     ctx.fill();
-
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(headerTag, x + w / 2, tagY + 23);
 
-    const rotatedPoints =
-      keyPoints.length > 0
-        ? keyPoints.map((_, idx) => keyPoints[(idx + variant) % keyPoints.length]).slice(0, 3)
-        : [`${brandText} • ${displayCategory}`];
-    ctx.font = isEnglish ? 'bold 29px sans-serif' : 'bold 31px "Hind Siliguri", sans-serif';
+    const shown = metrics.slice(0, 2);
+    if (shown.length === 2) {
+      const m1 = shown[0];
+      const m2 = shown[1];
+      const n1 = Math.max(0.01, m1.numericValue || 1);
+      const n2 = Math.max(0.01, m2.numericValue || 1);
+      const maxN = Math.max(n1, n2);
+      const ratio1 = Math.max(0.14, n1 / maxN);
+      const ratio2 = Math.max(0.14, n2 / maxN);
+
+      const cardW = Math.floor((w - 140) / 2);
+      const cardH = Math.min(340, Math.round(h * 0.36));
+      const cardY = y + h * 0.36 + slideUp;
+      const gap = 36;
+      const leftX = x + (w - (cardW * 2 + gap)) / 2;
+      const rightX = leftX + cardW + gap;
+
+      [
+        { m: m1, cx: leftX, ratio: ratio1, color: '#38bdf8' },
+        { m: m2, cx: rightX, ratio: ratio2, color: strapAccent || '#f59e0b' },
+      ].forEach(({ m, cx, ratio, color }) => {
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        ctx.beginPath();
+        ctx.roundRect(cx, cardY, cardW, cardH, 22);
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 24px "Hind Siliguri", sans-serif';
+        ctx.fillText(m.label.toUpperCase(), cx + cardW / 2, cardY + 56);
+
+        ctx.fillStyle = color;
+        const valFont = m.value.length > 12 ? 36 : 46;
+        ctx.font = isEnglish ? `bold ${valFont}px sans-serif` : `bold ${valFont}px "Hind Siliguri", sans-serif`;
+        ctx.fillText(m.value, cx + cardW / 2, cardY + cardH * 0.5);
+
+        // Animated comparison bar
+        const barW = cardW - 56;
+        const barX = cx + 28;
+        const barY = cardY + cardH - 54;
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, barW, 14, 7);
+        ctx.fill();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.roundRect(barX, barY, Math.max(18, barW * ratio * ease), 14, 7);
+        ctx.fill();
+      });
+
+      // Comparison badge if significant difference
+      const mult = Math.round(Math.max(n1, n2) / Math.min(n1, n2));
+      if (mult >= 2 && mult <= 10000) {
+        const badgeText = isEnglish ? `${mult}x DIFFERENCE` : `${mult} গুণ পার্থক্য`;
+        const bw = ctx.measureText(badgeText).width + 52;
+        const by = cardY + cardH + 28;
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.22)';
+        ctx.beginPath();
+        ctx.roundRect(x + (w - bw) / 2, by, bw, 44, 22);
+        ctx.fill();
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = '#a7f3d0';
+        ctx.font = isEnglish ? 'bold 21px sans-serif' : 'bold 23px "Hind Siliguri", sans-serif';
+        ctx.fillText(badgeText, x + w / 2, by + 22);
+      }
+      return;
+    }
+
+    // Single hero stat spotlight
+    const hero = shown[0];
+    const boxW = w - 160;
+    const boxH = 260;
+    const boxX = x + 80;
+    const boxY = y + h * 0.38 + slideUp;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    ctx.beginPath();
+    ctx.roundRect(boxX, boxY, boxW, boxH, 26);
+    ctx.fill();
+    ctx.strokeStyle = strapAccent || '#f59e0b';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.fillStyle = strapAccent || '#f59e0b';
+    ctx.font = isEnglish ? 'bold 64px sans-serif' : 'bold 64px "Hind Siliguri", sans-serif';
+    ctx.fillText(hero.value, x + w / 2, boxY + boxH * 0.42);
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = isEnglish ? 'bold 26px sans-serif' : 'bold 28px "Hind Siliguri", sans-serif';
+    ctx.fillText(hero.label, x + w / 2, boxY + boxH * 0.74);
+  }
+
+  private drawSubjectSpotlightGraphic(
+    ctx: any,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    _ease: number,
+    slideUp: number,
+    isEnglish: boolean,
+    displayCategory: string,
+    strapBg: string,
+    strapAccent: string,
+    subjects: StorySubject[]
+  ): void {
+    const headerTag = isEnglish ? `${displayCategory} • KEY PEOPLE & ROLES` : `${displayCategory} • মূল ব্যক্তিত্ব ও ভূমিকা`;
+    ctx.font = isEnglish ? 'bold 24px sans-serif' : 'bold 26px "Hind Siliguri", sans-serif';
+    const tagW = Math.min(w - 100, ctx.measureText(headerTag).width + 44);
+    const tagY = y + h * 0.22 + slideUp;
+    ctx.fillStyle = strapBg || '#2563eb';
+    ctx.beginPath();
+    ctx.roundRect(x + (w - tagW) / 2, tagY, tagW, 46, 23);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
-    rotatedPoints.forEach((pt, idx) => {
-      const boxY = centerY + idx * 102;
-      const boxW = w - 120;
-      const boxX = x + 60;
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.07)';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(headerTag, x + w / 2, tagY + 23);
+
+    const shown = subjects.slice(0, 3);
+    const cardW = w - 150;
+    const rowH = 98;
+    const startY = y + h * 0.37 + slideUp;
+    shown.forEach((subj, idx) => {
+      const cy = startY + idx * (rowH + 22);
+      const cx = x + 75;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.09)';
       ctx.beginPath();
-      ctx.roundRect(boxX, boxY, boxW, 82, 16);
+      ctx.roundRect(cx, cy, cardW, rowH, 18);
       ctx.fill();
-      ctx.strokeStyle = idx === 0 ? strapAccent || '#f59e0b' : 'rgba(255, 255, 255, 0.14)';
-      ctx.lineWidth = idx === 0 ? 2 : 1;
+      ctx.strokeStyle = idx === 0 ? strapAccent || '#f59e0b' : 'rgba(255, 255, 255, 0.2)';
+      ctx.lineWidth = 2;
       ctx.stroke();
 
-      const cleanPt = pt.length > 56 ? `${pt.slice(0, 53)}...` : pt;
-      ctx.fillStyle = '#f8fafc';
-      ctx.fillText(cleanPt, x + w / 2, boxY + 41);
+      // Monogram circle
+      const orbX = cx + 52;
+      const orbY = cy + rowH / 2;
+      ctx.fillStyle = strapBg || '#2563eb';
+      ctx.beginPath();
+      ctx.arc(orbX, orbY, 30, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.font = isEnglish ? 'bold 26px sans-serif' : 'bold 28px "Hind Siliguri", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(subj.name.slice(0, 1).toUpperCase(), orbX, orbY);
+
+      ctx.textAlign = 'left';
+      ctx.fillStyle = '#ffffff';
+      ctx.font = isEnglish ? 'bold 28px sans-serif' : 'bold 30px "Hind Siliguri", sans-serif';
+      ctx.fillText(subj.name.slice(0, 34), cx + 102, cy + 34);
+
+      ctx.fillStyle = strapAccent || '#fbbf24';
+      ctx.font = isEnglish ? '600 22px sans-serif' : 'bold 23px "Hind Siliguri", sans-serif';
+      ctx.fillText(subj.role.slice(0, 36), cx + 102, cy + 68);
+      ctx.textAlign = 'center';
+    });
+  }
+
+  private drawEditorialPullQuoteGraphic(
+    ctx: any,
+    x: number,
+    y: number,
+    w: number,
+    h: number,
+    slideUp: number,
+    isEnglish: boolean,
+    brandText: string,
+    displayCategory: string,
+    strapBg: string,
+    strapAccent: string,
+    keyPoints: string[]
+  ): void {
+    const headerTag = isEnglish ? `${displayCategory} • EDITORIAL TAKEAWAY` : `${displayCategory} • সম্পাদকীয় সারসংক্ষেপ`;
+    ctx.font = isEnglish ? 'bold 24px sans-serif' : 'bold 26px "Hind Siliguri", sans-serif';
+    const tagW = Math.min(w - 100, ctx.measureText(headerTag).width + 44);
+    const tagY = y + h * 0.23 + slideUp;
+    ctx.fillStyle = strapBg || '#2563eb';
+    ctx.beginPath();
+    ctx.roundRect(x + (w - tagW) / 2, tagY, tagW, 46, 23);
+    ctx.fill();
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(headerTag, x + w / 2, tagY + 23);
+
+    const quoteText = keyPoints[0] || `${brandText} • ${displayCategory}`;
+    const qX = x + 95;
+    const qY = y + h * 0.4 + slideUp;
+    const qW = w - 190;
+
+    // Vertical accent quote spine
+    ctx.fillStyle = strapAccent || '#f59e0b';
+    ctx.beginPath();
+    ctx.roundRect(qX - 24, qY, 8, 220, 4);
+    ctx.fill();
+
+    ctx.fillStyle = '#f8fafc';
+    const qFont = isEnglish ? 38 : 38;
+    ctx.font = isEnglish ? `bold ${qFont}px sans-serif` : `bold ${qFont}px "Hind Siliguri", sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    const qLines = this.wrapText(ctx, `“${quoteText}”`, qW).slice(0, 4);
+    qLines.forEach((ln, idx) => {
+      ctx.fillText(ln, qX, qY + idx * 54);
     });
   }
 
@@ -992,7 +1221,8 @@ export class ReelVideoRenderer {
       isEnglish,
     });
 
-    const speechScript = rewriteResult.spokenScript || this.ttsService.cleanDescription(textToSpeak, headline);
+    const rawSpeechScript = rewriteResult.spokenScript || this.ttsService.cleanDescription(textToSpeak, headline);
+    const ttsScript = formatScriptForTts(rawSpeechScript, isEnglish);
 
     // 2. Fetch channel logo, multiple topic B-roll clips (3-5s pacing), story image, and TTS in parallel
     const [logoImg, tempBgVideoFiles, fetchedArticleImg, synthesizedAudio] = await Promise.all([
@@ -1012,11 +1242,11 @@ export class ReelVideoRenderer {
             return null;
           })
         : Promise.resolve(null),
-      !voiceoverBuffer && speechScript
+      !voiceoverBuffer && ttsScript
         ? (async () => {
             try {
-              console.log(`[ReelVideoRenderer] 🎙️ Synthesizing news voiceover: "${speechScript.substring(0, 50)}..."`);
-              const audio = await this.ttsService.synthesize(speechScript, { isEnglish });
+              console.log(`[ReelVideoRenderer] 🎙️ Synthesizing news voiceover: "${ttsScript.substring(0, 55)}..."`);
+              const audio = await this.ttsService.synthesize(ttsScript, { isEnglish });
               if (audio) {
                 console.log(`[ReelVideoRenderer] ✓ News voiceover generated successfully (${audio.length} bytes)`);
               }
@@ -1089,17 +1319,29 @@ export class ReelVideoRenderer {
     const numCuts = Math.max(1, Math.min(8, Math.ceil(durationSeconds / 4.5)));
     const cutSeconds = durationSeconds / numCuts;
     const cutPlan: CutSlotPlan[] = [];
+    const availableGraphicModes: GraphicCardMode[] = [
+      ...(rewriteResult.metrics.length > 0 ? (['metrics_chart'] as GraphicCardMode[]) : []),
+      ...(rewriteResult.subjects.length > 0 ? (['subject_spotlight'] as GraphicCardMode[]) : []),
+      'editorial_quote',
+    ];
+    let graphicModeIdx = 0;
     let nextBrollIdx = 0;
     let photoUsed = false;
     const hasPhotoAsset = Boolean(articleImg);
 
-    // Build single non-repeating cut sequence across unique B-rolls, transformed story photo (max once), and graphic cards
+    const pickNextGraphicMode = (): GraphicCardMode => {
+      const mode = availableGraphicModes[graphicModeIdx % availableGraphicModes.length];
+      graphicModeIdx++;
+      return mode;
+    };
+
+    // Build single non-repeating cut sequence across unique B-rolls, transformed story photo (max once), and distinct graphic modes
     for (let i = 0; i < numCuts; i++) {
       if (hasPhotoAsset && !photoUsed && (i === 1 || numCuts === 1)) {
         cutPlan.push({ kind: 'photo', brollIdx: -1 });
         photoUsed = true;
       } else if (i === 2 && numCuts >= 3) {
-        cutPlan.push({ kind: 'graphic', brollIdx: -1 });
+        cutPlan.push({ kind: 'graphic', brollIdx: -1, graphicMode: pickNextGraphicMode() });
       } else if (nextBrollIdx < tempBgVideoFiles.length) {
         cutPlan.push({ kind: 'broll', brollIdx: nextBrollIdx });
         nextBrollIdx++;
@@ -1107,7 +1349,7 @@ export class ReelVideoRenderer {
         cutPlan.push({ kind: 'photo', brollIdx: -1 });
         photoUsed = true;
       } else {
-        cutPlan.push({ kind: 'graphic', brollIdx: -1 });
+        cutPlan.push({ kind: 'graphic', brollIdx: -1, graphicMode: pickNextGraphicMode() });
       }
     }
 
@@ -1118,6 +1360,8 @@ export class ReelVideoRenderer {
       cutSeconds,
       numCuts,
       keyPoints: rewriteResult.keyPoints,
+      metrics: rewriteResult.metrics,
+      subjects: rewriteResult.subjects,
       brollCount: tempBgVideoFiles.length,
       cutPlan,
     };

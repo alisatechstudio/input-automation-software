@@ -411,9 +411,15 @@ export class InputPipelineService {
           const targetTheme = source.reelTheme || config.REEL_DEFAULT_THEME;
           const reelDuration = Math.min(10, source.reelDuration ? Math.min(source.reelDuration, 10) : 8);
 
-          if (!item.imageUrl && item.link) {
+          if (item.link && (!item.imageUrl || (item.description || '').length < 500)) {
             try {
-              item.imageUrl = await this.parserService.scrapeOgImage(item.link);
+              const scraped = await this.parserService.scrapeArticleDetails(item.link);
+              if (!item.imageUrl && scraped.imageUrl) {
+                item.imageUrl = scraped.imageUrl;
+              }
+              if (scraped.fullText && scraped.fullText.length > (item.description || '').length + 60) {
+                item.description = scraped.fullText;
+              }
             } catch {}
           }
 
