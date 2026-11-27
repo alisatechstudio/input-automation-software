@@ -19,6 +19,12 @@ export interface InputAppConfig {
   MAX_ARTICLE_AGE_HOURS: number;
   REEL_DEFAULT_DURATION: number;
   REEL_DEFAULT_THEME: string;
+  LLM_API_KEY: string;
+  LLM_BASE_URL: string;
+  LLM_TTS_MODEL: string;
+  LLM_TTS_MODEL_BN: string;
+  LLM_TTS_VOICE: string;
+  LLM_TTS_VOICE_BN: string;
   ELEVENLABS_API_KEY: string;
   ELEVENLABS_BASE_URL: string;
   ELEVENLABS_MODEL_ID: string;
@@ -76,6 +82,20 @@ export const config: InputAppConfig = {
   MAX_ARTICLE_AGE_HOURS: process.env.MAX_ARTICLE_AGE_HOURS ? parseInt(process.env.MAX_ARTICLE_AGE_HOURS, 10) : 24,
   REEL_DEFAULT_DURATION: process.env.REEL_DEFAULT_DURATION ? parseInt(process.env.REEL_DEFAULT_DURATION, 10) : 8,
   REEL_DEFAULT_THEME: process.env.REEL_DEFAULT_THEME || 'canva-studio-rotate',
+  LLM_API_KEY: process.env.LLM_API_KEY || process.env.FREELMAPI_API_KEY || '',
+  LLM_BASE_URL: process.env.LLM_BASE_URL || process.env.FREELMAPI_BASE_URL || 'http://127.0.0.1:31415/v1',
+  LLM_TTS_MODEL: process.env.LLM_TTS_MODEL || process.env.FREELMAPI_TTS_MODEL || 'auto',
+  LLM_TTS_MODEL_BN:
+    process.env.LLM_TTS_MODEL_BN ||
+    process.env.LLM_TTS_MODEL ||
+    process.env.FREELMAPI_TTS_MODEL ||
+    'auto',
+  LLM_TTS_VOICE: process.env.LLM_TTS_VOICE || process.env.FREELMAPI_TTS_VOICE || '',
+  LLM_TTS_VOICE_BN:
+    process.env.LLM_TTS_VOICE_BN ||
+    process.env.LLM_TTS_VOICE ||
+    process.env.FREELMAPI_TTS_VOICE ||
+    '',
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
   ELEVENLABS_BASE_URL: process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io/v1',
   ELEVENLABS_MODEL_ID: process.env.ELEVENLABS_MODEL_ID || 'eleven_v3',

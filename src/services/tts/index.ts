@@ -3,6 +3,7 @@ import { isBengaliText, resolveTtsLanguage } from './cleaner.js';
 import { EasyVoiceTtsService } from './easyvoice.js';
 import { EdgeTtsService } from './edge-tts.js';
 import { ElevenLabsTtsService } from './elevenlabs.js';
+import { FreeLlmApiTtsService } from './freellmapi.js';
 import { MurfTtsService } from './murf.js';
 import { SynthesisOptions, TtsConnectionStatus } from './types.js';
 
@@ -14,9 +15,10 @@ interface TtsProviderStep {
 
 /**
  * Unified TTS orchestrator with multi-provider fallback:
- * ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Microsoft Edge TTS.
+ * FreeLLMAPI -> ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Microsoft Edge TTS.
  */
 export class UnifiedTtsService {
+  private freeLlmApiTts: FreeLlmApiTtsService;
   private elevenLabsTts: ElevenLabsTtsService;
   private cartesiaTts: CartesiaTtsService;
   private murfTts: MurfTtsService;
@@ -24,6 +26,7 @@ export class UnifiedTtsService {
   private edgeTts: EdgeTtsService;
 
   constructor() {
+    this.freeLlmApiTts = new FreeLlmApiTtsService();
     this.elevenLabsTts = new ElevenLabsTtsService();
     this.cartesiaTts = new CartesiaTtsService();
     this.murfTts = new MurfTtsService();
@@ -60,6 +63,11 @@ export class UnifiedTtsService {
     const stepOptions: SynthesisOptions = { ...autoOptions, isEnglish };
 
     const primaryCloudSteps: TtsProviderStep[] = [
+      {
+        name: 'FreeLLMAPI',
+        enabled: this.freeLlmApiTts.isConfigured(),
+        synthesize: () => this.freeLlmApiTts.synthesize(cleanText, stepOptions),
+      },
       {
         name: 'ElevenLabs',
         enabled: this.elevenLabsTts.isConfigured(),
@@ -120,6 +128,8 @@ export class UnifiedTtsService {
     options: SynthesisOptions
   ): Promise<Buffer | null> {
     switch (provider) {
+      case 'freellmapi':
+        return this.freeLlmApiTts.synthesize(text, options);
       case 'elevenlabs':
         return this.elevenLabsTts.synthesize(text, options);
       case 'cartesia':
@@ -172,12 +182,14 @@ export class UnifiedTtsService {
 
   public async testConnection(): Promise<TtsConnectionStatus> {
     const edgeStatus = await this.edgeTts.testConnection();
+    const freeLlmConfigured = this.freeLlmApiTts.isConfigured();
     const elConfigured = this.elevenLabsTts.isConfigured();
     const cartesiaConfigured = this.cartesiaTts.isConfigured();
     const murfConfigured = this.murfTts.isConfigured();
     const evConfigured = this.easyVoiceTts.isConfigured();
 
     const activeChain = [
+      freeLlmConfigured ? 'FreeLLMAPI' : null,
       elConfigured ? 'ElevenLabs' : null,
       cartesiaConfigured ? 'Cartesia' : null,
       murfConfigured ? 'Murf AI' : null,
@@ -186,14 +198,27 @@ export class UnifiedTtsService {
     ].filter(Boolean);
 
     return {
-      available: elConfigured || cartesiaConfigured || murfConfigured || evConfigured || edgeStatus.available,
+      available:
+        freeLlmConfigured ||
+        elConfigured ||
+        cartesiaConfigured ||
+        murfConfigured ||
+        evConfigured ||
+        edgeStatus.available,
       activeProvider: activeChain.join(' -> ') || 'None',
-      voice: `ElevenLabs (${this.elevenLabsTts.getDefaultVoice(true)}) / Cartesia (${this.cartesiaTts.getDefaultVoice(false)}) / Murf (${this.murfTts.getDefaultVoice(true)}, ${this.murfTts.getDefaultVoice(false)}) / Edge (${EdgeTtsService.BENGALI_VOICE})`,
-      message: `Priority chain: ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Microsoft Edge TTS (${activeChain.length} active providers).`,
+      voice: `FreeLLMAPI (${this.freeLlmApiTts.getDefaultVoice(true) || 'default'}) / ElevenLabs (${this.elevenLabsTts.getDefaultVoice(true)}) / Cartesia (${this.cartesiaTts.getDefaultVoice(false)}) / Murf (${this.murfTts.getDefaultVoice(true)}, ${this.murfTts.getDefaultVoice(false)}) / Edge (${EdgeTtsService.BENGALI_VOICE})`,
+      message: `Priority chain: FreeLLMAPI -> ElevenLabs -> Cartesia -> Murf AI -> EasyVoice / Microsoft Edge TTS (${activeChain.length} active providers).`,
     };
   }
 }
 
-export { ElevenLabsTtsService, CartesiaTtsService, MurfTtsService, EasyVoiceTtsService, EdgeTtsService };
+export {
+  FreeLlmApiTtsService,
+  ElevenLabsTtsService,
+  CartesiaTtsService,
+  MurfTtsService,
+  EasyVoiceTtsService,
+  EdgeTtsService,
+};
 export * from './types.js';
 export * from './cleaner.js';
