@@ -45,13 +45,16 @@ export class ScriptRewriterService {
       };
     }
 
-    const modelsToTry = Array.from(
-      new Set([this.primaryModel, 'free-router'].filter(Boolean))
-    );
+    const modelsToTry = process.env.VERCEL
+      ? [this.primaryModel].filter(Boolean)
+      : Array.from(new Set([this.primaryModel, 'free-router'].filter(Boolean)));
     for (const model of modelsToTry) {
-      const parsed = await this.requestRewrite(model, input);
-      if (parsed) {
-        return parsed;
+      const outcome = await this.requestRewrite(model, input);
+      if (outcome.result) {
+        return outcome.result;
+      }
+      if (outcome.stopRetrying) {
+        break;
       }
     }
 
@@ -65,7 +68,7 @@ export class ScriptRewriterService {
   private async requestRewrite(
     model: string,
     input: { headline: string; description?: string; category?: string; isEnglish: boolean }
-  ): Promise<ReelScriptRewriteResult | null> {
+  ): Promise<{ result: ReelScriptRewriteResult | null; stopRetrying?: boolean }> {
     const langInstruction = input.isEnglish
       ? 'Write spokenScript in crisp, engaging broadcast news English (2-3 natural sentences, 35-65 words). Never copy concatenated source names (like CNN, Mashable, NYT) or "Read the latest breaking report" boilerplate.'
       : 'Write spokenScript in natural, grammatical Dhaka TV broadcast Bangla (Bengali script, 2-3 clear sentences). Keep every fact, name, and number accurate; do NOT translate to English and do NOT add any comment-link CTA.';
@@ -99,22 +102,25 @@ export class ScriptRewriterService {
             { role: 'user', content: userPrompt },
           ],
         }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(3500),
       });
 
       if (!response.ok) {
         console.warn(`[ScriptRewriter] ⚠️ ${model} HTTP ${response.status}`);
-        return null;
+        return {
+          result: null,
+          stopRetrying: response.status === 429 || response.status === 401 || response.status === 403,
+        };
       }
 
       const data = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
       };
       const rawContent = (data?.choices?.[0]?.message?.content || '').trim();
-      if (!rawContent) return null;
+      if (!rawContent) return { result: null };
 
       const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return null;
+      if (!jsonMatch) return { result: null };
 
       const parsed = JSON.parse(jsonMatch[0]) as { spokenScript?: string; brollQuery?: string };
       const cleanedScript = cleanSpeechScript(
@@ -122,11 +128,11 @@ export class ScriptRewriterService {
         input.headline
       );
 
-      if (!cleanedScript || cleanedScript.length < 20) return null;
+      if (!cleanedScript || cleanedScript.length < 20) return { result: null };
 
       const hasBengali = isBengaliText(cleanedScript);
-      if (input.isEnglish && hasBengali) return null;
-      if (!input.isEnglish && !hasBengali) return null;
+      if (input.isEnglish && hasBengali) return { result: null };
+      if (!input.isEnglish && !hasBengali) return { result: null };
 
       const brollQuery =
         (parsed.brollQuery || '').replace(/[^\w\s-]/g, ' ').replace(/\s+/g, ' ').trim() ||
@@ -136,13 +142,15 @@ export class ScriptRewriterService {
         `[ScriptRewriter] ✨ Rewrote script via ${model} (${cleanedScript.length} chars, broll="${brollQuery}")`
       );
       return {
-        spokenScript: cleanedScript,
-        brollQuery,
-        rewrittenByLlm: true,
+        result: {
+          spokenScript: cleanedScript,
+          brollQuery,
+          rewrittenByLlm: true,
+        },
       };
     } catch (err: any) {
       console.warn(`[ScriptRewriter] ⚠️ ${model} error: ${err?.message || err}`);
-      return null;
+      return { result: null };
     }
   }
 }

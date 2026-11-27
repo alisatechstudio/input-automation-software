@@ -86,7 +86,7 @@ export const config: InputAppConfig = {
   MAX_ARTICLE_AGE_HOURS: process.env.MAX_ARTICLE_AGE_HOURS ? parseInt(process.env.MAX_ARTICLE_AGE_HOURS, 10) : 24,
   REEL_DEFAULT_DURATION: process.env.REEL_DEFAULT_DURATION ? parseInt(process.env.REEL_DEFAULT_DURATION, 10) : 8,
   REEL_DEFAULT_THEME: process.env.REEL_DEFAULT_THEME || 'canva-studio-rotate',
-  REEL_RESOLUTION: process.env.REEL_RESOLUTION || '1080p',
+  REEL_RESOLUTION: process.env.REEL_RESOLUTION || (process.env.VERCEL ? '540p' : '1080p'),
   PIXABAY_API_KEY: process.env.PIXABAY_API_KEY || '',
   LLM_API_KEY: process.env.LLM_API_KEY || process.env.FREELMAPI_API_KEY || '',
   LLM_BASE_URL: process.env.LLM_BASE_URL || process.env.FREELMAPI_BASE_URL || 'http://127.0.0.1:31415/v1',

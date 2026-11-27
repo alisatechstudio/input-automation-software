@@ -40,6 +40,7 @@ const CATEGORY_VIDEO_QUERIES: Record<string, string> = {
 };
 
 const MAX_VIDEO_BYTES = 15 * 1024 * 1024;
+const PREFERRED_VIDEO_BYTES = 6 * 1024 * 1024;
 
 /**
  * Fetches licensed stock B-roll MP4 clips from the Pixabay Videos API.
@@ -123,12 +124,16 @@ export class PixabayVideoService {
   ): { id: number; url: string } | null {
     const valid = hits
       .map((hit) => {
-        const videoPool = [hit.videos?.small, hit.videos?.medium, hit.videos?.tiny].filter(
+        const videoPool = [hit.videos?.tiny, hit.videos?.small, hit.videos?.medium].filter(
           (v): v is PixabayVideoFile =>
             Boolean(v?.url && (!v.size || v.size <= MAX_VIDEO_BYTES))
         );
+        // Prefer fast-decoding streams under 6MB (tiny >= 480px or small <= 6MB) before heavier clips
         const preferred =
-          videoPool.find((v) => (v.width || 0) >= 640) || videoPool[0];
+          videoPool.find((v) => (v.width || 0) >= 640 && (!v.size || v.size <= PREFERRED_VIDEO_BYTES)) ||
+          videoPool.find((v) => (v.width || 0) >= 480 && (!v.size || v.size <= PREFERRED_VIDEO_BYTES)) ||
+          videoPool.find((v) => (v.width || 0) >= 640) ||
+          videoPool[0];
         return preferred?.url ? { id: hit.id, url: preferred.url, duration: hit.duration || 0 } : null;
       })
       .filter((x): x is { id: number; url: string; duration: number } => Boolean(x));
@@ -150,7 +155,7 @@ export class PixabayVideoService {
   ): Promise<string | null> {
     try {
       const response = await fetch(videoUrl, {
-        signal: AbortSignal.timeout(9000),
+        signal: AbortSignal.timeout(7000),
       });
       if (!response.ok) return null;
 

@@ -224,7 +224,7 @@ export class InputPipelineService {
           {
             _id: 'default_bdnews',
             name: 'BD News 24/7',
-            url: 'https://bdnews.site/feed/',
+            url: 'https://bdnews.site/rss.php',
             pageId: 'default',
             templateId: 'template-canva-bdnews',
             gdriveFolderId: config.GDRIVE_FOLDER_ID,
@@ -317,6 +317,8 @@ export class InputPipelineService {
       let grandTotalFetched = 0;
       let grandTotalReelsCreated = 0;
       let grandTotalUploadedToDrive = 0;
+      let grandTotalFailures = 0;
+      let firstFailureMessage: string | null = null;
 
       for (const source of activeSources) {
         this.addLog(`📡 Fetching source: "${source.name}" (${source.url})...`);
@@ -355,6 +357,7 @@ export class InputPipelineService {
         let skippedTooOld = 0;
         let reelsCreated = 0;
         let uploadedToDrive = 0;
+        let sourceLastError: string | null = null;
         const processedArticles: SourceInputResult['articles'] = [];
 
         const targetItems: any[] = [];
@@ -420,6 +423,7 @@ export class InputPipelineService {
           this.jobState.stage = 'rendering_reel';
 
           let reelBuffer: Buffer | null = null;
+          let renderError: string | null = null;
           try {
             reelBuffer = await this.reelRenderer.renderReel({
               headline: item.title,
@@ -437,7 +441,12 @@ export class InputPipelineService {
             reelsCreated++;
             grandTotalReelsCreated++;
           } catch (renderErr: any) {
-            console.warn(`[InputPipeline] Reel render error: ${renderErr.message}`);
+            renderError = renderErr?.message || String(renderErr);
+            sourceLastError = renderError;
+            grandTotalFailures++;
+            if (!firstFailureMessage) firstFailureMessage = renderError;
+            this.addLog(`❌ Reel render failed for "${item.title.substring(0, 45)}...": ${renderError}`);
+            console.warn(`[InputPipeline] Reel render error: ${renderError}`);
           }
 
           let gdriveFileId: string | null = null;
@@ -472,12 +481,18 @@ export class InputPipelineService {
                 console.log(`✓ [InputPipeline] Saved to Drive folder! (ID: ${gdriveFileId})`);
               } else {
                 const failReason = uploadRes.error || (uploadRes.isLocalFallback ? 'Saved to local temp only (Google Drive upload failed)' : 'Drive upload failed');
+                sourceLastError = failReason;
+                grandTotalFailures++;
+                if (!firstFailureMessage) firstFailureMessage = failReason;
                 this.addLog(`⚠️ Google Drive upload failed for "${filename}": ${failReason}`);
                 console.warn(`[InputPipeline] ⚠️ Google Drive upload failed for "${filename}": ${failReason}`);
               }
             } catch (upErr: any) {
-              this.addLog(`❌ Google Drive upload error: ${upErr.message}`);
-              console.error('[InputPipeline] Drive upload failed:', upErr.message);
+              sourceLastError = upErr?.message || String(upErr);
+              grandTotalFailures++;
+              if (!firstFailureMessage) firstFailureMessage = sourceLastError;
+              this.addLog(`❌ Google Drive upload error: ${sourceLastError}`);
+              console.error('[InputPipeline] Drive upload failed:', sourceLastError);
             }
 
             const isReallyUploaded = !!gdriveFileId && !gdriveFileId.startsWith('local_');
@@ -499,6 +514,7 @@ export class InputPipelineService {
                       gdriveFileId: isReallyUploaded ? gdriveFileId : null,
                       gdriveFolderId: folderId,
                       gdriveUploadStatus: isReallyUploaded ? 'uploaded' : 'failed',
+                      error: isReallyUploaded ? null : sourceLastError,
                       updatedAt: new Date(),
                     },
                     $setOnInsert: {
@@ -512,6 +528,34 @@ export class InputPipelineService {
                 console.warn('[InputPipeline] DB update note:', dbErr.message);
               }
             }
+          } else if (renderError && dbAvailable && articlesCol) {
+            try {
+              await articlesCol.updateOne(
+                { $or: [{ guid: item.guid }, { link: item.link }] },
+                {
+                  $set: {
+                    sourceId: source._id,
+                    guid: item.guid,
+                    link: item.link,
+                    title: item.title,
+                    description: item.description || '',
+                    category: effectiveCategory,
+                    pubDate: item.pubDate,
+                    imageUrl: item.imageUrl || null,
+                    status: 'failed',
+                    error: renderError,
+                    updatedAt: new Date(),
+                  },
+                  $setOnInsert: {
+                    _id: articleId,
+                    createdAt: new Date(),
+                  },
+                },
+                { upsert: true }
+              );
+            } catch (dbErr: any) {
+              console.warn('[InputPipeline] DB failure record note:', dbErr.message);
+            }
           }
 
           const isReallyUploaded = !!gdriveFileId && !gdriveFileId.startsWith('local_');
@@ -519,7 +563,7 @@ export class InputPipelineService {
             title: item.title,
             gdriveFileId: isReallyUploaded && gdriveFileId ? gdriveFileId : undefined,
             filename,
-            status: isReallyUploaded ? 'uploaded_to_drive' : reelBuffer ? 'rendered' : 'skipped',
+            status: isReallyUploaded ? 'uploaded_to_drive' : reelBuffer ? 'rendered' : renderError ? 'failed' : 'skipped',
           });
         }
 
@@ -532,6 +576,7 @@ export class InputPipelineService {
                   lastPolledAt: new Date(),
                   lastReelsCreated: reelsCreated,
                   lastUploadedToDrive: uploadedToDrive,
+                  lastError: uploadedToDrive > 0 ? null : sourceLastError,
                   updatedAt: new Date(),
                 },
               }
@@ -553,19 +598,27 @@ export class InputPipelineService {
           skippedDuplicate,
           skippedTooOld,
           articles: processedArticles,
+          ...(sourceLastError && uploadedToDrive === 0 ? { error: sourceLastError } : {}),
         });
       }
 
       const totalDuration = Date.now() - startTime;
+      const cycleError =
+        grandTotalReelsCreated > 0 && grandTotalUploadedToDrive === 0
+          ? `Google Drive upload failed: ${this.gdriveUploader.lastAuthError || this.gdriveUploader.lastUploadError || firstFailureMessage || 'Check Drive refresh token'}`
+          : grandTotalFailures > 0 && grandTotalUploadedToDrive === 0
+          ? `Reel creation failed: ${firstFailureMessage || 'Unknown render error'}`
+          : null;
+
       let summaryMsg = `✓ Cycle Complete in ${totalDuration}ms: Generated ${grandTotalReelsCreated} reel(s), uploaded ${grandTotalUploadedToDrive} to Drive!`;
-      if (grandTotalReelsCreated > 0 && grandTotalUploadedToDrive === 0) {
-        summaryMsg = `⚠️ Cycle Complete with warnings: Generated ${grandTotalReelsCreated} reel(s), but Google Drive upload failed: ${this.gdriveUploader.lastAuthError || this.gdriveUploader.lastUploadError || 'OAuth/Upload Error'}`;
+      if (cycleError) {
+        summaryMsg = `⚠️ Cycle Complete with errors in ${totalDuration}ms: ${cycleError}`;
       }
 
       console.log(`\n[InputPipeline] ${summaryMsg}`);
 
       const result: InputCronResult = {
-        success: grandTotalUploadedToDrive > 0 || grandTotalReelsCreated === 0,
+        success: !cycleError,
         timestamp: new Date().toISOString(),
         durationMs: totalDuration,
         sourcesProcessed: activeSources.length,
@@ -573,16 +626,15 @@ export class InputPipelineService {
         totalReelsCreated: grandTotalReelsCreated,
         totalUploadedToDrive: grandTotalUploadedToDrive,
         results: sourceResults,
-        ...(grandTotalReelsCreated > 0 && grandTotalUploadedToDrive === 0
-          ? { error: `Google Drive upload failed: ${this.gdriveUploader.lastAuthError || this.gdriveUploader.lastUploadError || 'Check Drive refresh token'}` }
-          : {}),
+        ...(cycleError ? { error: cycleError } : {}),
       };
 
       this.jobState.isRunning = false;
-      this.jobState.stage = 'completed';
+      this.jobState.stage = cycleError ? 'error' : 'completed';
       this.jobState.progressPercent = 100;
       this.jobState.completedAt = new Date().toISOString();
       this.jobState.lastResult = result;
+      this.jobState.lastError = cycleError;
       this.addLog(summaryMsg);
 
       return result;

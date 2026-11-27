@@ -363,15 +363,41 @@ export class ReelVideoRenderer {
   }
 
   private getDefaultDimensions(isVertical: boolean): { defaultWidth: number; defaultHeight: number } {
-    const isStandardDef =
-      process.env.REEL_RESOLUTION === '540p' ||
-      process.env.LOW_RES === 'true' ||
-      (config.REEL_RESOLUTION === '540p' && !process.env.REEL_RESOLUTION);
-    const isHighDef = !isStandardDef;
+    const requestedResolution = (
+      process.env.REEL_RESOLUTION ||
+      (process.env.LOW_RES === 'true' ? '540p' : config.REEL_RESOLUTION) ||
+      (process.env.VERCEL ? '540p' : '1080p')
+    )
+      .trim()
+      .toLowerCase();
+
+    if (process.env.LOW_RES === 'true' || requestedResolution === '540p') {
+      return {
+        defaultWidth: isVertical ? 540 : 1080,
+        defaultHeight: isVertical ? 960 : 1080,
+      };
+    }
+    if (requestedResolution === '720p') {
+      return {
+        defaultWidth: isVertical ? 720 : 1080,
+        defaultHeight: isVertical ? 1280 : 1080,
+      };
+    }
     return {
-      defaultWidth: isHighDef ? 1080 : isVertical ? 540 : 1080,
-      defaultHeight: isHighDef ? (isVertical ? 1920 : 1080) : isVertical ? 960 : 1080,
+      defaultWidth: 1080,
+      defaultHeight: isVertical ? 1920 : 1080,
     };
+  }
+
+  private async loadImageWithTimeout(imageUrl: string, timeoutMs: number = 5000): Promise<any> {
+    const res = await fetch(imageUrl, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    return loadImage(buf);
   }
 
   private punchVideoStageWindow(
@@ -572,7 +598,7 @@ export class ReelVideoRenderer {
     let articleImg: any = null;
     if (input.imageUrl) {
       try {
-        articleImg = await loadImage(input.imageUrl);
+        articleImg = await this.loadImageWithTimeout(input.imageUrl, 5000);
       } catch (e) {}
     }
 
@@ -710,7 +736,7 @@ export class ReelVideoRenderer {
     let articleImg: any = null;
     if (!tempBgVideoFile && input.imageUrl) {
       try {
-        articleImg = await loadImage(input.imageUrl);
+        articleImg = await this.loadImageWithTimeout(input.imageUrl, 5000);
       } catch (e: any) {
         console.warn('[ReelVideoRenderer] Could not load fallback article image for reel:', e.message);
       }
@@ -939,8 +965,9 @@ export class ReelVideoRenderer {
       }
     } catch {}
 
-    // Adaptive watchdog timer so 1080p + Pixabay compositing finishes cleanly within serverless limits
-    const watchdogMs = Math.min(55000, Math.max(25000, Math.ceil(durationSeconds * 3000)));
+    // Adaptive watchdog timer so errors surface cleanly before serverless hard-timeout kills
+    const watchdogCeilingMs = process.env.VERCEL ? 46000 : 55000;
+    const watchdogMs = Math.min(watchdogCeilingMs, Math.max(20000, Math.ceil(durationSeconds * 2500)));
     const killWatchdog = setTimeout(() => {
       try {
         if (!ffmpegProcess.killed) {
