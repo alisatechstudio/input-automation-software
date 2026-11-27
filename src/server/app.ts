@@ -413,7 +413,7 @@ export function createInputServer(pipeline: InputPipelineService): Express {
           {
             _id: 'default_trendingnews',
             name: 'Trending News World',
-            url: 'https://trendingnews.world/feed/',
+            url: 'https://trendingnews.world/rss.xml',
             pageId: 'trending',
             templateId: 'template-trendingnews-breaking',
             gdriveFolderId: config.GDRIVE_FOLDER_ID,
@@ -454,7 +454,7 @@ export function createInputServer(pipeline: InputPipelineService): Express {
           {
             _id: 'default_trendingnews',
             name: 'Trending News World',
-            url: 'https://trendingnews.world/feed/',
+            url: 'https://trendingnews.world/rss.xml',
             pageId: 'trending',
             templateId: 'template-trendingnews-breaking',
             gdriveFolderId: config.GDRIVE_FOLDER_ID,

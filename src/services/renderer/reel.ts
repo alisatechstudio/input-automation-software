@@ -613,7 +613,11 @@ export class ReelVideoRenderer {
     let voiceoverBuffer = input.voiceoverBuffer || null;
     const textToSpeak = (input.description && input.description.trim()) ? input.description : headline;
     if (!voiceoverBuffer && textToSpeak) {
-      const speechScript = this.ttsService.cleanDescription(textToSpeak, headline);
+      let speechScript = this.ttsService.cleanDescription(textToSpeak, headline);
+      if (speechScript && !isEnglish && !/কমেন্টে দে(?:য়া|ওয়া) লিংকে/.test(speechScript)) {
+        const endsWithPunct = /[।!?.\n]$/.test(speechScript);
+        speechScript = `${speechScript}${endsWithPunct ? ' ' : '। '}বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে।`;
+      }
       if (speechScript) {
         try {
           console.log(`[ReelVideoRenderer] 🎙️ Synthesizing news voiceover: "${speechScript.substring(0, 50)}..."`);
@@ -1153,6 +1157,39 @@ export class ReelVideoRenderer {
     ctx.restore();
   }
 
+  private drawCanvaStudioFooter(
+    ctx: any,
+    width: number,
+    progress: number,
+    strapBg: string,
+    isEnglish: boolean
+  ): void {
+    ctx.save();
+    const footerY = 1765;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.beginPath();
+    ctx.roundRect(40, footerY, width - 80, 8, 4);
+    ctx.fill();
+
+    ctx.fillStyle = strapBg;
+    ctx.beginPath();
+    ctx.roundRect(40, footerY, (width - 80) * progress, 8, 4);
+    ctx.fill();
+
+    ctx.fillStyle = isEnglish ? '#94a3b8' : '#f8fafc';
+    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 25px "Hind Siliguri", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(
+      isEnglish
+        ? '🔴 FOLLOW & SHARE • TRENDING NEWS WORLD'
+        : '💬 বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে • BD News 24/7',
+      width / 2,
+      footerY + 45
+    );
+    ctx.restore();
+  }
+
   /**
    * Full-Screen News Presenter (Style A):
    * Features full-bleed vertical news anchor video, sleek breaking news ticker strap,
@@ -1398,28 +1435,7 @@ export class ReelVideoRenderer {
     ctx.restore();
 
     // 6. Footer Safe Bar (Y: 1765 to 1860)
-    ctx.save();
-    const footerY = 1765;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.beginPath();
-    ctx.roundRect(40, footerY, width - 80, 8, 4);
-    ctx.fill();
-
-    ctx.fillStyle = strapBg;
-    ctx.beginPath();
-    ctx.roundRect(40, footerY, (width - 80) * progress, 8, 4);
-    ctx.fill();
-
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      isEnglish ? '🔴 FOLLOW & SHARE • TRENDING NEWS WORLD' : '🔴 ফলো ও শেয়ার করুন • BD News 24/7 অফিসিয়াল পেইজ',
-      width / 2,
-      footerY + 45
-    );
-    ctx.restore();
+    this.drawCanvaStudioFooter(ctx, width, progress, strapBg, isEnglish);
   }
 
   /**
@@ -1638,28 +1654,7 @@ export class ReelVideoRenderer {
     ctx.restore();
 
     // 6. Footer Safe Bar (Y: 1765 to 1860)
-    ctx.save();
-    const footerY = 1765;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.beginPath();
-    ctx.roundRect(40, footerY, width - 80, 8, 4);
-    ctx.fill();
-
-    ctx.fillStyle = strapBg;
-    ctx.beginPath();
-    ctx.roundRect(40, footerY, (width - 80) * progress, 8, 4);
-    ctx.fill();
-
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      isEnglish ? '🔴 FOLLOW & SHARE • TRENDING NEWS WORLD' : '🔴 ফলো ও শেয়ার করুন • BD News 24/7 অফিসিয়াল পেইজ',
-      width / 2,
-      footerY + 45
-    );
-    ctx.restore();
+    this.drawCanvaStudioFooter(ctx, width, progress, strapBg, isEnglish);
   }
 
   /**
@@ -1865,28 +1860,7 @@ export class ReelVideoRenderer {
     ctx.restore();
 
     // 6. Footer Safe Bar (Y: 1765 to 1860)
-    ctx.save();
-    const footerY = 1765;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
-    ctx.beginPath();
-    ctx.roundRect(40, footerY, width - 80, 8, 4);
-    ctx.fill();
-
-    ctx.fillStyle = strapBg;
-    ctx.beginPath();
-    ctx.roundRect(40, footerY, (width - 80) * progress, 8, 4);
-    ctx.fill();
-
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      isEnglish ? '🔴 FOLLOW & SHARE • TRENDING NEWS WORLD' : '🔴 ফলো ও শেয়ার করুন • BD News 24/7 অফিসিয়াল পেইজ',
-      width / 2,
-      footerY + 45
-    );
-    ctx.restore();
+    this.drawCanvaStudioFooter(ctx, width, progress, strapBg, isEnglish);
   }
 
   /**
@@ -2306,13 +2280,14 @@ export class ReelVideoRenderer {
 
     // 6. Action & Source Bar (Safe Zone: Y = 1590 to 1650)
     const actionY = 1590;
-    const actionPillW = 430;
+    const websitePillW = isEnglish ? 430 : 320;
+    const commentPillW = isEnglish ? 430 : 535;
     ctx.save();
 
     // Website Pill (Left)
     ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
     ctx.beginPath();
-    ctx.roundRect(40, actionY, actionPillW, 58, 29);
+    ctx.roundRect(40, actionY, websitePillW, 58, 29);
     ctx.fill();
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
     ctx.lineWidth = 1.5;
@@ -2331,15 +2306,15 @@ export class ReelVideoRenderer {
     ctx.fillText(cleanWebsite, 95, actionY + 29);
 
     // Comment Link Pill (Right) - Ends at X: 915 to stay clear of Facebook Like button
-    const comPillX = width - 40 - 125 - actionPillW;
+    const comPillX = width - 40 - 125 - commentPillW;
     ctx.fillStyle = commentPillBg;
     ctx.beginPath();
-    ctx.roundRect(comPillX, actionY, actionPillW, 58, 29);
+    ctx.roundRect(comPillX, actionY, commentPillW, 58, 29);
     ctx.fill();
 
     // Chat bubble vector icon
     ctx.fillStyle = commentPillText;
-    const cIconX = comPillX + 38;
+    const cIconX = comPillX + 34;
     const cIconY = actionY + 29;
     ctx.beginPath();
     ctx.roundRect(cIconX - 11, cIconY - 8, 20, 15, 4);
@@ -2351,10 +2326,10 @@ export class ReelVideoRenderer {
     ctx.fill();
 
     ctx.fillStyle = commentPillText;
-    ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 23px "Hind Siliguri", sans-serif';
+    ctx.font = isEnglish ? 'bold 22px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(isEnglish ? 'Full story in first comment' : 'বিস্তারিত প্রথম কমেন্টে দেখুন', cIconX + 20, actionY + 29);
+    ctx.fillText(isEnglish ? 'Full story in first comment' : 'বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে', cIconX + 18, actionY + 29);
     ctx.restore();
 
     // 7. Animated Video Progress Bar (Y = 1665)
@@ -2627,7 +2602,7 @@ export class ReelVideoRenderer {
     const footerH = 54;
 
     ctx.save();
-    const followW = 460;
+    const followW = isEnglish ? 460 : 390;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
     ctx.beginPath();
     ctx.roundRect(45, footerY, followW, footerH, 27);
@@ -2662,7 +2637,7 @@ export class ReelVideoRenderer {
     ctx.restore();
 
     ctx.save();
-    const ribbonW = isEnglish ? 275 : 210;
+    const ribbonW = isEnglish ? 275 : 500;
     const ribbonX = width - 45 - ribbonW;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
@@ -2687,10 +2662,14 @@ export class ReelVideoRenderer {
     ctx.fill();
 
     ctx.fillStyle = '#0f172a';
-    ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
+    ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 21px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(isEnglish ? 'Full Story in Comments' : 'বিস্তারিত কমেন্টে', cIconX + (isEnglish ? 14 : 18), footerY + footerH / 2 + 1);
+    ctx.fillText(
+      isEnglish ? 'Full Story in Comments' : 'বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে',
+      cIconX + (isEnglish ? 14 : 18),
+      footerY + footerH / 2 + 1
+    );
     ctx.restore();
   }
 
@@ -2886,7 +2865,7 @@ export class ReelVideoRenderer {
     ctx.fillText(
       isEnglish
         ? '🔴 TRENDING NEWS WORLD • TOP DISPATCHES • FOLLOW FOR LIVE UPDATES • FULL STORY IN COMMENTS 🔴'
-        : '🔴 BD NEWS 24/7 • শীর্ষ সংবাদ আপডেট • চোখ রাখুন আমাদের পেজে • বিস্তারিত কমেন্টে 🔴',
+        : '🔴 BD NEWS 24/7 • শীর্ষ সংবাদ আপডেট • বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে 🔴',
       width / 2 - tickerOffset + 150,
       990
     );
@@ -3075,9 +3054,11 @@ export class ReelVideoRenderer {
     // F. Footer
     ctx.save();
     const footerY = 935;
+    const leftPillW = isEnglish ? 450 : 340;
+    const rightPillW = isEnglish ? 280 : 540;
     ctx.fillStyle = 'rgba(6, 182, 212, 0.12)';
     ctx.beginPath();
-    ctx.roundRect(45, footerY, 450, 50, 25);
+    ctx.roundRect(45, footerY, leftPillW, 50, 25);
     ctx.fill();
     ctx.strokeStyle = 'rgba(6, 182, 212, 0.3)';
     ctx.lineWidth = 1;
@@ -3092,7 +3073,7 @@ export class ReelVideoRenderer {
 
     ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
     ctx.beginPath();
-    ctx.roundRect(width - 45 - 280, footerY, 280, 50, 25);
+    ctx.roundRect(width - 45 - rightPillW, footerY, rightPillW, 50, 25);
     ctx.fill();
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
     ctx.lineWidth = 1;
@@ -3101,7 +3082,11 @@ export class ReelVideoRenderer {
     ctx.fillStyle = '#e2e8f0';
     ctx.font = isEnglish ? 'bold 18px sans-serif' : 'bold 20px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(isEnglish ? '💬 Full story in comments' : '💬 বিস্তারিত কমেন্টে পড়ুন', width - 45 - 140, footerY + 25);
+    ctx.fillText(
+      isEnglish ? '💬 Full story in comments' : '💬 বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে',
+      width - 45 - rightPillW / 2,
+      footerY + 25
+    );
     ctx.restore();
   }
 
@@ -3392,9 +3377,10 @@ export class ReelVideoRenderer {
 
     // Website Pill (Left)
     const cleanWebsite = (website || (isEnglish ? 'trendingnews.world' : 'bdnews.site')).toLowerCase();
+    const leftPillW = isEnglish ? 460 : 340;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
     ctx.beginPath();
-    ctx.roundRect(50, footerY, 460, 52, 26);
+    ctx.roundRect(50, footerY, leftPillW, 52, 26);
     ctx.fill();
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
     ctx.lineWidth = 1;
@@ -3414,7 +3400,7 @@ export class ReelVideoRenderer {
 
     // Call-To-Action Pill (Right) with Attention Bounce
     const btnFloat = Math.sin(f * 0.22) * 2;
-    const rightPillW = isEnglish ? 300 : 280;
+    const rightPillW = isEnglish ? 300 : 540;
     const rightPillX = width - 50 - rightPillW;
     ctx.fillStyle = '#ffffff';
     ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
@@ -3427,7 +3413,7 @@ export class ReelVideoRenderer {
 
     // Vector Chat Bubble Icon
     ctx.fillStyle = style.gradientStops[1];
-    const cIconX = rightPillX + (isEnglish ? 28 : 35);
+    const cIconX = rightPillX + (isEnglish ? 28 : 34);
     const cIconY = footerY + btnFloat + 26;
     ctx.beginPath();
     ctx.roundRect(cIconX - 10, cIconY - 8, 18, 13, 3);
@@ -3439,10 +3425,10 @@ export class ReelVideoRenderer {
     ctx.fill();
 
     ctx.fillStyle = style.gradientStops[0];
-    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
+    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 21px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(isEnglish ? 'Full Story in Comments' : 'বিস্তারিত কমেন্টে', cIconX + 16, cIconY);
+    ctx.fillText(isEnglish ? 'Full Story in Comments' : 'বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে', cIconX + 16, cIconY);
     ctx.restore();
   }
 
@@ -3646,9 +3632,11 @@ export class ReelVideoRenderer {
     // E. Social Action Pills (y: 1720)
     ctx.save();
     const pillY = 1718;
+    const leftPillW = isEnglish ? 460 : 330;
+    const rightPillW = isEnglish ? 240 : 570;
     ctx.fillStyle = 'rgba(0,0,0,0.6)';
     ctx.beginPath();
-    ctx.roundRect(40, pillY, 460, 60, 30);
+    ctx.roundRect(40, pillY, leftPillW, 60, 30);
     ctx.fill();
 
     const cleanWebsite = (website || (isEnglish ? 'trendingnews.world' : 'bdnews.site')).toLowerCase();
@@ -3660,13 +3648,17 @@ export class ReelVideoRenderer {
 
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
-    ctx.roundRect(width - 40 - 240, pillY, 240, 60, 30);
+    ctx.roundRect(width - 40 - rightPillW, pillY, rightPillW, 60, 30);
     ctx.fill();
 
     ctx.fillStyle = '#0f172a';
-    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 24px "Hind Siliguri", sans-serif';
+    ctx.font = isEnglish ? 'bold 20px sans-serif' : 'bold 22px "Hind Siliguri", sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(isEnglish ? '💬 Full story in comments' : '💬 বিস্তারিত কমেন্টে', width - 40 - 120, pillY + 30);
+    ctx.fillText(
+      isEnglish ? '💬 Full story in comments' : '💬 বিস্তারিত পড়ুন কমেন্টে দেয়া লিংকে',
+      width - 40 - rightPillW / 2,
+      pillY + 30
+    );
 
     // Follow Ribbon (y: 1800)
     const ribbonY = 1800;
