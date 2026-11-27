@@ -581,10 +581,11 @@ export class ReelVideoRenderer {
     const scaleY = height / refHeight;
     const needsScale = scaleX !== 1 || scaleY !== 1;
 
-    // Base reel duration (minimum 5s if no audio)
+    // Fallback reel duration (used only when no voiceover audio is generated)
     let durationSeconds = input.durationSeconds ? Math.max(4, input.durationSeconds) : 5;
     // Meta Reels strictly requires frame rate between 24 and 60 fps (Sub-24 fps triggers Error 1363129)
     const fps = 24;
+    let totalFrames = Math.max(1, Math.round(durationSeconds * fps));
 
     // 1. Preload article image
     let articleImg: any = null;
@@ -658,24 +659,25 @@ export class ReelVideoRenderer {
         }
       }
 
-      // Accurate fallback from audio buffer bitrate (48kbps mono MP3 = 6000 bytes/sec; RIFF WAV = 48000 bytes/sec)
+      // Exact WAV header duration fallback before bitrate estimation
+      if (voiceDurationSecs <= 0 && isWav) {
+        voiceDurationSecs = this.getWavDurationSeconds(voiceoverBuffer);
+      }
+
+      // Bitrate estimation fallback if ffprobe and header parsing both fail
       if (voiceDurationSecs <= 0) {
-        if (isWav) {
-          voiceDurationSecs = voiceoverBuffer.length / 48000;
-        } else {
-          voiceDurationSecs = voiceoverBuffer.length / 6000;
-        }
+        voiceDurationSecs = isWav ? voiceoverBuffer.length / 48000 : voiceoverBuffer.length / 16000;
       }
 
       if (voiceDurationSecs > 0) {
-        // Reel duration strictly complies with readout of complete RSS description (+ 0.75s smooth outro padding)
-        const matchedDuration = Math.ceil(voiceDurationSecs + 0.75);
-        durationSeconds = Math.max(durationSeconds, matchedDuration);
-        console.log(`[ReelVideoRenderer] ⏱️ Voiceover readout: ${voiceDurationSecs.toFixed(2)}s -> Reel duration set to: ${durationSeconds}s`);
+        // Reel length strictly matches the full description readout: not less, not more (<= 1 frame rounding).
+        totalFrames = Math.max(1, Math.ceil(voiceDurationSecs * fps));
+        durationSeconds = totalFrames / fps;
+        console.log(
+          `[ReelVideoRenderer] ⏱️ Voiceover readout: ${voiceDurationSecs.toFixed(3)}s -> Reel duration matched: ${durationSeconds.toFixed(3)}s (${totalFrames} frames @ ${fps}fps)`
+        );
       }
     }
-
-    const totalFrames = durationSeconds * fps;
 
     // 4. Configure FFmpeg spawn arguments with low-resource featherweight settings
     const numThreads = Math.min(2, os.cpus()?.length || 1);
@@ -728,6 +730,7 @@ export class ReelVideoRenderer {
       '-ar', '48000', // 48kHz sample rate as required by Meta
       '-ac', '2',     // Stereo channels as required by Meta
       '-threads', String(numThreads),
+      '-t', durationSeconds.toFixed(6),
       '-shortest'
     );
 
@@ -807,15 +810,16 @@ export class ReelVideoRenderer {
       }
     } catch {}
 
-    // 20-second watchdog timer to guarantee execution never breaches 25s threshold
+    // Adaptive watchdog timer so longer description readouts finish cleanly within serverless limits
+    const watchdogMs = Math.min(55000, Math.max(20000, Math.ceil(durationSeconds * 2500)));
     const killWatchdog = setTimeout(() => {
       try {
         if (!ffmpegProcess.killed) {
-          console.warn('[ReelVideoRenderer] Watchdog: FFmpeg exceeded 20s timeout, terminating process...');
+          console.warn(`[ReelVideoRenderer] Watchdog: FFmpeg exceeded ${Math.round(watchdogMs / 1000)}s timeout, terminating process...`);
           ffmpegProcess.kill('SIGKILL');
         }
       } catch {}
-    }, 20000);
+    }, watchdogMs);
 
     try {
       // Wait for ffmpeg to complete
@@ -856,6 +860,32 @@ export class ReelVideoRenderer {
           fs.unlinkSync(tempVoiceFile);
         }
       } catch {}
+    }
+  }
+
+  private getWavDurationSeconds(buffer: Buffer): number {
+    try {
+      if (buffer.length < 44 || buffer.toString('ascii', 0, 4) !== 'RIFF' || buffer.toString('ascii', 8, 12) !== 'WAVE') {
+        return 0;
+      }
+      let offset = 12;
+      let byteRate = 0;
+      let dataSize = 0;
+      while (offset + 8 <= buffer.length) {
+        const chunkId = buffer.toString('ascii', offset, offset + 4);
+        const chunkSize = buffer.readUInt32LE(offset + 4);
+        const payloadOffset = offset + 8;
+        if (chunkId === 'fmt ' && payloadOffset + 12 <= buffer.length) {
+          byteRate = buffer.readUInt32LE(payloadOffset + 8);
+        } else if (chunkId === 'data') {
+          dataSize = chunkSize === 0xffffffff ? buffer.length - payloadOffset : Math.min(chunkSize, buffer.length - payloadOffset);
+          break;
+        }
+        offset = payloadOffset + chunkSize + (chunkSize % 2);
+      }
+      return byteRate > 0 && dataSize > 0 ? dataSize / byteRate : 0;
+    } catch {
+      return 0;
     }
   }
 

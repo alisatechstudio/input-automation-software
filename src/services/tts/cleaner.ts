@@ -44,26 +44,8 @@ export function cleanSpeechScript(description?: string, headline?: string): stri
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (!clean || clean.length < 15) {
+  if (!clean || clean.length < 3 || !/[\p{L}\p{N}]/u.test(clean)) {
     return fallbackHeadline;
-  }
-
-  // Preserve complete description from RSS. If text exceptionally exceeds 500 characters
-  // (e.g. if the full article body was provided instead of a summary), keep complete sentences up to 500 characters.
-  if (clean.length > 500) {
-    const sentences = clean.split(/(?<=[।!?.\n])\s+/);
-    let concise = '';
-    for (const s of sentences) {
-      if ((concise + ' ' + s).trim().length <= 500) {
-        concise = (concise + ' ' + s).trim();
-      } else {
-        break;
-      }
-    }
-    if (concise && concise.length >= 30) {
-      return concise;
-    }
-    return clean.slice(0, 500).trim();
   }
 
   return clean;

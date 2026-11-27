@@ -415,7 +415,7 @@ export class InputPipelineService {
           }
 
           this.addLog(
-            `🎬 Rendering Reel for: "${item.title.substring(0, 45)}..." (Theme: ${targetTheme}, Duration: ${reelDuration}s)...`
+            `🎬 Rendering Reel for: "${item.title.substring(0, 45)}..." (Theme: ${targetTheme}, Duration: auto-matched to full description)...`
           );
           this.jobState.stage = 'rendering_reel';
 
