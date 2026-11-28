@@ -1,8 +1,8 @@
 const LOOPBACK_URL_RE = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i;
 
 export const NARAROUTER_BASE_URL = 'https://router.bynara.id/v1';
-export const NARAROUTER_DEFAULT_CHAT_MODEL = 'gpt-6-luna';
-export const NARAROUTER_FALLBACK_MODELS = ['qwen3.8-flash', 'mimo-v2.6-flash'] as const;
+export const NARAROUTER_DEFAULT_CHAT_MODEL = 'gpt-5.6-luna';
+export const NARAROUTER_FALLBACK_MODELS = ['gpt-5.6-luna', 'qwen3.8-flash', 'glm-5.3-flash', 'mimo-v2.6-flash', 'deepseek-v4.1-flash'] as const;
 
 function extractHostname(rawUrl: string): string {
   try {
