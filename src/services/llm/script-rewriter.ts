@@ -8,7 +8,13 @@ import {
   stripRepeatedHeadlinePrefix,
   trimToCompleteSentences,
 } from '../tts/cleaner.js';
-import { isLlmEndpointConfigured, resolveLlmEndpoint } from './client.js';
+import {
+  isLlmEndpointConfigured,
+  isNaraRouterEndpoint,
+  NARAROUTER_DEFAULT_CHAT_MODEL,
+  resolveChatFallbackModels,
+  resolveLlmEndpoint,
+} from './client.js';
 
 export interface StoryMetric {
   label: string;
@@ -90,8 +96,9 @@ const TOPIC_EDITORIAL_NOTES: Array<{ pattern: RegExp; en: string; bn: string }> 
 ];
 
 /**
- * Uses FreeLLMAPI chat models to turn raw RSS headlines/descriptions into original broadcast narration
- * and concise English Pixabay B-roll search keywords, falling back cleanly to `cleanSpeechScript`.
+ * Uses OpenAI-compatible router chat models (NaraRouter / FreeLLMAPI) to turn raw RSS headlines/descriptions
+ * into original broadcast narration and concise English Pixabay B-roll search keywords, falling back cleanly
+ * to `cleanSpeechScript`.
  */
 export class ScriptRewriterService {
   private apiKey: string;
@@ -101,7 +108,10 @@ export class ScriptRewriterService {
   constructor() {
     this.apiKey = (config.LLM_API_KEY || '').trim();
     this.baseUrl = (config.LLM_BASE_URL || '').trim();
-    this.primaryModel = (config.LLM_CHAT_MODEL || 'mistral-small-3.2-24b').trim();
+    const defaultModel = isNaraRouterEndpoint(this.apiKey, this.baseUrl)
+      ? NARAROUTER_DEFAULT_CHAT_MODEL
+      : 'mistral-small-3.2-24b';
+    this.primaryModel = (config.LLM_CHAT_MODEL || defaultModel).trim();
   }
 
   public isConfigured(): boolean {
@@ -120,9 +130,7 @@ export class ScriptRewriterService {
       return fallback;
     }
 
-    const modelsToTry = process.env.VERCEL
-      ? [this.primaryModel].filter(Boolean)
-      : Array.from(new Set([this.primaryModel, 'free-router'].filter(Boolean)));
+    const modelsToTry = resolveChatFallbackModels(this.primaryModel, this.apiKey, this.baseUrl);
     for (const model of modelsToTry) {
       const outcome = await this.requestRewrite(model, input, fallback);
       if (outcome.result) {
@@ -364,11 +372,14 @@ export class ScriptRewriterService {
             { role: 'user', content: userPrompt },
           ],
         }),
-        signal: AbortSignal.timeout(4500),
+        signal: AbortSignal.timeout(process.env.VERCEL ? 6000 : 8500),
       });
 
       if (!response.ok) {
-        console.warn(`[ScriptRewriter] ⚠️ ${model} HTTP ${response.status}`);
+        const errSnippet = (await response.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 180);
+        console.warn(
+          `[ScriptRewriter] ⚠️ ${model} HTTP ${response.status}${errSnippet ? `: ${errSnippet}` : ''}`
+        );
         return {
           result: null,
           stopRetrying: response.status === 429 || response.status === 401 || response.status === 403,

@@ -1,5 +1,5 @@
 import { config } from '../../config/env.js';
-import { isLlmEndpointConfigured, resolveLlmEndpoint } from '../llm/client.js';
+import { isLlmEndpointConfigured, isNaraRouterEndpoint, resolveLlmEndpoint } from '../llm/client.js';
 import { resolveTtsLanguage } from './cleaner.js';
 import { postTtsAudioRequest } from './http.js';
 import { SynthesisOptions } from './types.js';
@@ -16,8 +16,8 @@ export class FreeLlmApiTtsService {
   private banglaVoice: string;
 
   constructor() {
-    this.apiKey = (config.LLM_API_KEY || '').trim();
-    this.baseUrl = (config.LLM_BASE_URL || '').trim().replace(/\/+$/, '');
+    this.apiKey = (config.LLM_TTS_API_KEY || '').trim();
+    this.baseUrl = (config.LLM_TTS_BASE_URL || '').trim().replace(/\/+$/, '');
     this.englishModel = config.LLM_TTS_MODEL || 'auto';
     this.banglaModel = config.LLM_TTS_MODEL_BN || this.englishModel;
     this.englishVoice = config.LLM_TTS_VOICE || '';
@@ -25,7 +25,10 @@ export class FreeLlmApiTtsService {
   }
 
   public isConfigured(): boolean {
-    return isLlmEndpointConfigured(this.apiKey, this.baseUrl);
+    return (
+      !isNaraRouterEndpoint(this.apiKey, this.baseUrl) &&
+      isLlmEndpointConfigured(this.apiKey, this.baseUrl)
+    );
   }
 
   public getDefaultVoice(isEnglish: boolean = true): string {

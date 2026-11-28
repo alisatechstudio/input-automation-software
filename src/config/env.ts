@@ -1,5 +1,11 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import {
+  isLoopbackLlmUrl,
+  isNaraRouterEndpoint,
+  NARAROUTER_BASE_URL,
+  NARAROUTER_DEFAULT_CHAT_MODEL,
+} from '../services/llm/client.js';
 
 dotenv.config();
 
@@ -25,6 +31,8 @@ export interface InputAppConfig {
   LLM_BASE_URL: string;
   LLM_CHAT_MODEL: string;
   LLM_SCRIPT_REWRITE: boolean;
+  LLM_TTS_API_KEY: string;
+  LLM_TTS_BASE_URL: string;
   LLM_TTS_MODEL: string;
   LLM_TTS_MODEL_BN: string;
   LLM_TTS_VOICE: string;
@@ -62,6 +70,45 @@ const assetsDir = process.env.ASSETS_DIR || path.join(rootDir, 'assets');
 const ATLAS_DEFAULT_URI =
   'mongodb+srv://Vercel-Admin-atlas-copper-notebook:BNp8pQVDocNKaDwL@atlas-copper-notebook.0czlcmy.mongodb.net/?retryWrites=true&w=majority';
 
+const naraApiKey = (process.env.NARAROUTER_API_KEY || '').trim();
+const explicitLlmApiKey = (process.env.LLM_API_KEY || '').trim();
+const freeLlmApiKey = (process.env.FREELMAPI_API_KEY || '').trim();
+const resolvedLlmApiKey = naraApiKey || explicitLlmApiKey || freeLlmApiKey;
+const isNaraKey = Boolean(naraApiKey) || resolvedLlmApiKey.startsWith('sk-nry-');
+const rawChatBaseUrl = (
+  (naraApiKey
+    ? process.env.NARAROUTER_BASE_URL ||
+      (isNaraRouterEndpoint('', process.env.LLM_BASE_URL || '') ? process.env.LLM_BASE_URL : '')
+    : process.env.NARAROUTER_BASE_URL || process.env.LLM_BASE_URL) || ''
+).trim();
+const resolvedLlmBaseUrl =
+  rawChatBaseUrl && !(isNaraKey && isLoopbackLlmUrl(rawChatBaseUrl))
+    ? rawChatBaseUrl
+    : isNaraKey
+    ? NARAROUTER_BASE_URL
+    : process.env.FREELMAPI_BASE_URL || 'http://127.0.0.1:31415/v1';
+const isNaraConfigured = isNaraRouterEndpoint(resolvedLlmApiKey, resolvedLlmBaseUrl);
+const rawChatModel = (
+  process.env.NARAROUTER_CHAT_MODEL ||
+  process.env.LLM_CHAT_MODEL ||
+  process.env.FREELMAPI_CHAT_MODEL ||
+  ''
+).trim();
+const resolvedChatModel =
+  isNaraConfigured && (!rawChatModel || /^(mistral-small-3\.2-24b|free-router)$/i.test(rawChatModel))
+    ? NARAROUTER_DEFAULT_CHAT_MODEL
+    : rawChatModel || 'mistral-small-3.2-24b';
+const resolvedTtsApiKey = (
+  process.env.LLM_TTS_API_KEY ||
+  freeLlmApiKey ||
+  (isNaraConfigured ? '' : resolvedLlmApiKey)
+).trim();
+const resolvedTtsBaseUrl = (
+  process.env.LLM_TTS_BASE_URL ||
+  process.env.FREELMAPI_BASE_URL ||
+  (isNaraConfigured ? '' : resolvedLlmBaseUrl)
+).trim();
+
 export const config: InputAppConfig = {
   PORT: process.env.PORT ? parseInt(process.env.PORT, 10) : 3001,
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -88,10 +135,12 @@ export const config: InputAppConfig = {
   REEL_DEFAULT_THEME: process.env.REEL_DEFAULT_THEME || 'canva-studio-rotate',
   REEL_RESOLUTION: process.env.REEL_RESOLUTION || (process.env.VERCEL ? '540p' : '1080p'),
   PIXABAY_API_KEY: process.env.PIXABAY_API_KEY || '',
-  LLM_API_KEY: process.env.LLM_API_KEY || process.env.FREELMAPI_API_KEY || '',
-  LLM_BASE_URL: process.env.LLM_BASE_URL || process.env.FREELMAPI_BASE_URL || 'http://127.0.0.1:31415/v1',
-  LLM_CHAT_MODEL: process.env.LLM_CHAT_MODEL || process.env.FREELMAPI_CHAT_MODEL || 'mistral-small-3.2-24b',
+  LLM_API_KEY: resolvedLlmApiKey,
+  LLM_BASE_URL: resolvedLlmBaseUrl,
+  LLM_CHAT_MODEL: resolvedChatModel,
   LLM_SCRIPT_REWRITE: process.env.LLM_SCRIPT_REWRITE !== 'false',
+  LLM_TTS_API_KEY: resolvedTtsApiKey,
+  LLM_TTS_BASE_URL: resolvedTtsBaseUrl,
   LLM_TTS_MODEL: process.env.LLM_TTS_MODEL || process.env.FREELMAPI_TTS_MODEL || 'auto',
   LLM_TTS_MODEL_BN:
     process.env.LLM_TTS_MODEL_BN ||
